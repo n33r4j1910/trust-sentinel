@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::net::TcpListener;
-use std::io::Read;
 
 use chrono::Utc;
 use hmac::{Hmac, Mac};
@@ -26,7 +27,7 @@ struct SystemState {
     listening_ports: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Baseline {
     state: SystemState,
     signature: String,
@@ -74,6 +75,7 @@ fn main() {
         seed,
     }));
 
+    // HTTP server
     let state_http = state.clone();
     std::thread::spawn(move || {
         let listener = TcpListener::bind(("127.0.0.1", HTTP_PORT)).unwrap();
@@ -84,7 +86,7 @@ fn main() {
                 let status = state_http.lock().unwrap().status.clone();
                 let json = serde_json::to_string(&status).unwrap();
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
                     json.len(), json
                 );
                 let _ = stream.write_all(response.as_bytes());
@@ -92,12 +94,14 @@ fn main() {
         }
     });
 
+    // Token generator
     let state_token = state.clone();
     std::thread::spawn(move || loop {
         generate_token(&state_token);
         std::thread::sleep(Duration::from_secs(30));
     });
 
+    // Integrity checker
     let state_integrity = state.clone();
     std::thread::spawn(move || loop {
         check_integrity(&state_integrity);
@@ -145,25 +149,149 @@ fn generate_token(state: &Arc<Mutex<AppState>>) {
     guard.status.token = token;
 }
 
-fn collect_current_state() -> SystemState {
-    let hosts = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts").unwrap_or_default();
-    SystemState {
-        dns_servers: vec!["192.168.1.1".to_string()],
-        hosts_hash: hex::encode(ring::digest::digest(&ring::digest::SHA256, hosts.as_bytes())),
-        startup_entries: vec!["OneDrive".to_string()],
-        services: vec!["Dhcp".to_string(), "Dnscache".to_string()],
-        listening_ports: vec!["0.0.0.0:445".to_string()],
+// ─── REAL SYSTEM DATA COLLECTION ───────────────────────────────
+
+fn get_dns_servers() -> Vec<String> {
+    let mut dns = Vec::new();
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses.Count -gt 0 } | ForEach-Object { $_.ServerAddresses -join ',' }"
+        ])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            for addr in line.split(',') {
+                let addr = addr.trim();
+                if !addr.is_empty() && !dns.contains(&addr.to_string()) {
+                    dns.push(addr.to_string());
+                }
+            }
+        }
+    }
+    if dns.is_empty() {
+        dns.push("Unknown".into());
+    }
+    dns
+}
+
+fn get_hosts_hash() -> String {
+    let path = "C:\\Windows\\System32\\drivers\\etc\\hosts";
+    if let Ok(content) = fs::read_to_string(path) {
+        hex::encode(ring::digest::digest(&ring::digest::SHA256, content.as_bytes()))
+    } else {
+        "unreadable".into()
     }
 }
+
+fn get_startup_entries() -> Vec<String> {
+    let mut entries = Vec::new();
+    // Registry: HKLM Run
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
+        ])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if !line.trim().is_empty() {
+                entries.push(line.trim().to_string());
+            }
+        }
+    }
+    // Registry: HKCU Run
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
+        ])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if !line.trim().is_empty() {
+                entries.push(line.trim().to_string());
+            }
+        }
+    }
+    // Startup folder
+    let startup = std::env::var("APPDATA").unwrap_or_default()
+        + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup";
+    if let Ok(dir) = fs::read_dir(&startup) {
+        for entry in dir.flatten() {
+            entries.push(format!("StartupFolder: {}", entry.file_name().to_string_lossy()));
+        }
+    }
+    if entries.is_empty() {
+        entries.push("None".into());
+    }
+    entries
+}
+
+fn get_services() -> Vec<String> {
+    let mut services = Vec::new();
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object -ExpandProperty Name"
+        ])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if !line.trim().is_empty() {
+                services.push(line.trim().to_string());
+            }
+        }
+    }
+    services.sort();
+    services.truncate(50); // keep first 50 to avoid huge baseline
+    services
+}
+
+fn get_listening_ports() -> Vec<String> {
+    let mut ports = Vec::new();
+    if let Ok(output) = Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines().skip(4) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1].contains(':') {
+                let addr = parts[1].to_string();
+                if addr != "0.0.0.0:0" && addr != "[::]:0" {
+                    if !addr.ends_with(":12788") {
+    			ports.push(addr);
+	};
+                }
+            }
+        }
+    }
+    ports.sort();
+    ports.dedup();
+    ports.truncate(30);
+    ports
+}
+
+fn collect_current_state() -> SystemState {
+    SystemState {
+        dns_servers: get_dns_servers(),
+        hosts_hash: get_hosts_hash(),
+        startup_entries: get_startup_entries(),
+        services: get_services(),
+        listening_ports: get_listening_ports(),
+    }
+}
+
+// ─── BASELINE & INTEGRITY ──────────────────────────────────────
 
 fn load_or_create_baseline(data_dir: &PathBuf, seed: &[u8]) -> Baseline {
     let path = data_dir.join("baseline.json");
     if path.exists() {
-        let data = fs::read_to_string(&path).unwrap();
-        let baseline: Baseline = serde_json::from_str(&data).unwrap();
-        let expected = sign_state(&baseline.state, seed);
-        if expected == baseline.signature {
-            return baseline;
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(baseline) = serde_json::from_str::<Baseline>(&data) {
+                let expected = sign_state(&baseline.state, seed);
+                if expected == baseline.signature {
+                    return baseline;
+                }
+            }
         }
     }
     let state = collect_current_state();
@@ -182,21 +310,41 @@ fn sign_state(state: &SystemState, seed: &[u8]) -> String {
 
 fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, String)> {
     let mut diffs = Vec::new();
-    if baseline.dns_servers != current.dns_servers {
-        diffs.push(("dns_change".into(), "DNS servers changed".into()));
+
+    let b_dns: HashSet<&str> = baseline.dns_servers.iter().map(|s| s.as_str()).collect();
+    let c_dns: HashSet<&str> = current.dns_servers.iter().map(|s| s.as_str()).collect();
+    if b_dns != c_dns {
+        diffs.push(("dns_change".into(), format!("DNS changed: {:?} -> {:?}", baseline.dns_servers, current.dns_servers)));
     }
+
     if baseline.hosts_hash != current.hosts_hash {
         diffs.push(("hosts_change".into(), "Hosts file modified".into()));
     }
-    if baseline.startup_entries != current.startup_entries {
-        diffs.push(("startup_change".into(), "Startup entries changed".into()));
+
+    let b_startup: HashSet<&str> = baseline.startup_entries.iter().map(|s| s.as_str()).collect();
+    let c_startup: HashSet<&str> = current.startup_entries.iter().map(|s| s.as_str()).collect();
+    let new_startup: Vec<_> = c_startup.difference(&b_startup).collect();
+    let removed_startup: Vec<_> = b_startup.difference(&c_startup).collect();
+    if !new_startup.is_empty() || !removed_startup.is_empty() {
+        diffs.push(("startup_change".into(), format!("Startup: +{:?} -{:?}", new_startup, removed_startup)));
     }
-    if baseline.services != current.services {
-        diffs.push(("service_change".into(), "New or removed services".into()));
+
+    let b_svc: HashSet<&str> = baseline.services.iter().map(|s| s.as_str()).collect();
+    let c_svc: HashSet<&str> = current.services.iter().map(|s| s.as_str()).collect();
+    let new_svc: Vec<_> = c_svc.difference(&b_svc).collect();
+    let removed_svc: Vec<_> = b_svc.difference(&c_svc).collect();
+    if !new_svc.is_empty() || !removed_svc.is_empty() {
+        diffs.push(("service_change".into(), format!("Services: +{:?} -{:?}", new_svc, removed_svc)));
     }
-    if baseline.listening_ports != current.listening_ports {
-        diffs.push(("port_change".into(), "Listening ports changed".into()));
+
+    let b_ports: HashSet<&str> = baseline.listening_ports.iter().map(|s| s.as_str()).collect();
+    let c_ports: HashSet<&str> = current.listening_ports.iter().map(|s| s.as_str()).collect();
+    let new_ports: Vec<_> = c_ports.difference(&b_ports).collect();
+    let removed_ports: Vec<_> = b_ports.difference(&c_ports).collect();
+    if !new_ports.is_empty() || !removed_ports.is_empty() {
+        diffs.push(("port_change".into(), format!("Ports: +{:?} -{:?}", new_ports, removed_ports)));
     }
+
     diffs
 }
 
@@ -209,8 +357,9 @@ fn log_event(state: &mut AppState, event_type: &str, details: &str, severity: &s
     };
     state.events.push(event.clone());
     let log_path = PathBuf::from(DATA_DIR).join("events.log");
-    let mut file = fs::OpenOptions::new().create(true).append(true).open(log_path).unwrap();
-    writeln!(file, "{}", serde_json::to_string(&event).unwrap()).ok();
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(file, "{}", serde_json::to_string(&event).unwrap());
+    }
 }
 
 fn check_integrity(state: &Arc<Mutex<AppState>>) {
@@ -234,7 +383,8 @@ fn check_integrity(state: &Arc<Mutex<AppState>>) {
         0 => "Trusted",
         1 => "Warning",
         _ => "Compromised",
-    }.into();
+    }
+    .into();
     guard.status.last_check = Utc::now().to_rfc3339();
     guard.status.latest_events = guard.events.iter().rev().take(5).cloned().collect();
 }
