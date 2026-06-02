@@ -1,196 +1,157 @@
 # 🛡️ Trust Sentinel
 
-**Lightweight, hardware-rooted endpoint trust agent for Windows.**
+### Your device's silent guardian. No cloud. No nonsense.
 
-> "Can this device still be trusted right now?" — Answered every 30 seconds using TPM 2.0.
+Trust Sentinel answers one question, every 30 seconds: **"Can this device still be trusted?"**
 
-[![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange)](https://rustup.rs)
-[![Platform](https://img.shields.io/badge/Windows-10%2F11-blue)](https://github.com/n33r4j1910/trust-sentinel)
-[![TPM](https://img.shields.io/badge/TPM-2.0-green)](https://github.com/n33r4j1910/trust-sentinel)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+It's not antivirus. It's not EDR. It doesn't scan files or chase signatures. It watches the handful of signals that actually matter — your DNS, hosts file, startup programs, open ports, and firewall. When something changes that shouldn't, it alerts you. When someone attacks, it blocks them.
 
-Trust Sentinel is **not** an antivirus, EDR, XDR, or SIEM. It is a **device integrity guardian** — a smoke alarm for trust that runs silently, uses minimal resources, and never calls home.
+All powered by your TPM 2.0 chip. All running offline.
 
 ---
 
-## ✨ Features
+## What It Does
 
-### 🔐 Trust Shield
-- **TPM 2.0 hardware-rooted** seed generation (`tpm_sealed: true`)
-- **HMAC-SHA256 rotating trust token** every 30 seconds (64-char hex)
-- Time-windowed tokens prevent replay attacks
-- Falls back to file-based seed if TPM unavailable
+- 🔐 **Generates a rotating trust token** every 30 seconds using HMAC-SHA256 and your TPM 2.0
+- 📋 **Takes a snapshot** of your system's critical state (DNS, hosts, startup, ports, firewall)
+- 🔍 **Watches for changes** every 5 minutes — and tells you exactly what changed
+- 🔴 **Detects attacks** — port scans, brute force login attempts, risky open ports
+- 🛑 **Fights back** — automatically blocks attacking IPs via Windows Firewall
+- 🩹 **Heals itself** — resets baseline after legitimate changes, restarts if crashed
+- 🖥️ **Shows trust status** as a green/yellow/red dot in your system tray
 
-### 📋 Integrity Monitoring (every 5 min)
-- DNS server changes
-- Hosts file modifications (SHA256 hash)
-- Startup entries (Registry + Startup folder)
-- Listening ports (TCP LISTENING only)
-- Windows Firewall profile changes
-- HMAC-signed baseline prevents tampering
+## What It Doesn't Do
 
-### 🔴 Intrusion Detection (every 10 sec)
-- **Port scan detection** — alerts on 20+ ports from single external IP
-- **Brute force detection** — 5+ failed logins in 60 seconds (Event ID 4625)
-- **Risky port alerts** — RDP, SMB, SSH, Telnet, and 13 more
-- **Firewall change monitoring** — detects disabled profiles
-
-### 🖥️ System Tray
-- 🟢 Trusted / 🟡 Warning / 🔴 Compromised
-- Round icon, updates every 2 seconds
-- Silent startup, no popup windows
-
-### 🔄 Self-Healing
-- Watchdog auto-restarts daemon + tray if crashed
-- Auto-resets baseline after repeated legitimate changes
-
-### 🚫 Privacy-First
-- 100% offline — zero cloud, zero telemetry, zero accounts
-- HTTP server binds to `127.0.0.1` only
-- All data stored locally in `C:\ProgramData\Trust Sentinel\`
+- ❌ No file scanning
+- ❌ No virus signatures
+- ❌ No cloud uploads
+- ❌ No AI models
+- ❌ No packet inspection
+- ❌ No user tracking
+- ❌ No performance impact
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Prerequisites
-- Windows 10/11 (64-bit)
-- [Rust](https://rustup.rs) (MSVC toolchain)
-- TPM 2.0 (optional — falls back to file-based seed)
+### You'll need
+- Windows 10 or 11 (64-bit)
+- [Rust](https://rustup.rs) installed
+- TPM 2.0 (recommended, but works without it)
 
-### Build
+### Build and run
+
 ```bash
 git clone https://github.com/n33r4j1910/trust-sentinel.git
 cd trust-sentinel
 cargo build --release
-
-Run
-bash
 target\release\trust-sentinel-daemon.exe
-Open http://127.0.0.1:12788
 
-Auto-Start
-Shortcut installed at:
+Then open http://127.0.0.1:12788 in your browser.
 
-text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\TrustSentinel.lnk
-📊 Resource Footprint
-Metric	Value
-CPU (idle)	<0.1%
-RAM	~25-30 MB
-Disk	<5 MB
-Network	None (localhost only)
-Battery	Negligible
-
-🏗️ Architecture
-
-text
-trust-sentinel/
-├── daemon/                  # Background trust engine
-│   ├── Cargo.toml
-│   └── src/main.rs          # TPM, token, integrity, intrusion detection
-├── tray/                    # System tray application
-│   ├── Cargo.toml
-│   └── src/main.rs          # Live trust status icon
-├── start.bat                # Silent launcher + watchdog loop
-└── Cargo.toml               # Workspace root
-Runtime data: C:\ProgramData\Trust Sentinel\
-
-tpm_seed.bin — TPM 2.0 generated seed
-
-seed.bin — File-based fallback seed
-
-baseline.json — HMAC-signed system snapshot
-
-events.log — JSON-lines security event log
-
-📡 API
-
-GET http://127.0.0.1:12788
+You'll see:
 
 json
 {
   "trust_state": "Trusted",
-  "token": "a3f2c1b8d5e6f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2",
+  "token": "a3f2c1b8...",
   "tpm_sealed": true,
   "last_check": "2026-06-02T12:00:00Z",
   "latest_events": []
 }
 
-🔒 Security
+Make it start with Windows
 
-Layer	Mechanism
-Seed generation	TPM 2.0 RNGCryptoServiceProvider
-Token	HMAC-SHA256, 30-second time window
-Baseline integrity	HMAC-SHA256 signature verified every read
-Replay prevention	Time-windowed tokens expire after 30s
-Network	Localhost-only HTTP, zero external connections
-Tamper detection	Signature mismatch → immediate Compromised state
+A shortcut is placed in your Startup folder automatically. Restart your PC — the green dot appears on its own.
 
-🧪 Tested Attack Scenarios
-✅ Hosts file modification → Detected
+How It Works
+Trust Shield
+Every 30 seconds, Trust Sentinel generates a 64-character token using your device's unique seed (stored in TPM when available). If anyone tampers with your system, the baseline signature won't match and trust drops.
 
-✅ DNS server change → Detected
+Integrity Monitoring
+On first run, it captures your DNS servers, hosts file hash, startup programs, listening ports, and firewall state. Every 5 minutes it compares. A single change = Warning. Multiple changes = Compromised.
 
-✅ New startup entry → Detected
+Intrusion Detection
+Every 10 seconds, it checks:
 
-✅ Firewall profile change → Detected
+Port scans — 20+ connections from one external IP = attacker blocked via Firewall
 
-✅ Port scan simulation → Detected
+Brute force — 5+ failed Windows logins in 60 seconds = RDP port blocked
 
-✅ Brute force login → Detected
+Risky ports — alerts if RDP (3389), SMB (445), SSH (22), and 14 other dangerous ports are open
 
-✅ Agent termination → Watchdog restarts
+Self-Protection
+Watchdog restarts the daemon or tray if either crashes
 
-✅ Baseline tampering → Signature mismatch alert
+Baseline auto-resets after repeated legitimate changes
 
+All data signed with HMAC — tampering is detected instantly
 
-📋 Trust States
+System Impact
+Metric	Value
+CPU (idle)	<0.1%
+RAM	~30 MB
+Disk	<5 MB
+Network	None (localhost only)
+Battery	Negligible
+It won't slow down your machine. Even on older laptops.
 
-State	Condition	Icon
-Trusted	Zero unauthorized changes	🟢
-Warning	One change detected	🟡
-Compromised	Multiple changes or tampering	🔴
+Privacy
 
-🛣️ Roadmap
+Everything stays on your device.
 
-Rotating trust token (HMAC-SHA256)
+No accounts
 
-TPM 2.0 hardware-rooted seed
+No API keys
 
-System baseline monitoring
+No telemetry
 
-Intrusion detection (port scan, brute force, risky ports)
+No cloud uploads
 
-System tray with live status
+HTTP server only accessible from 127.0.0.1
 
-Watchdog auto-restart
+Project Layout
 
-Auto-healing baseline
+text
+trust-sentinel/
+├── daemon/src/main.rs    # The brain — trust engine, integrity, intrusion detection
+├── tray/src/main.rs      # System tray — green/yellow/red dot
+├── start.bat             # Silent launcher with watchdog loop
+├── startup.vbs           # Invisible startup script
+└── Cargo.toml            # Rust workspace
 
-Real-time ETW event monitoring
+Real Attacks It Catches
 
-Credential file guard (SSH keys, browser passwords)
+✅ Modified hosts file (DNS poisoning)
 
-Linux support (eBPF + TPM2-TSS)
+✅ New startup entries (malware persistence)
 
-macOS support (Endpoint Security + Secure Enclave)
+✅ Firewall disabled
 
-Remote attestation (optional, privacy-preserving)
+✅ Port scan from external IP → blocked
 
-Encrypted local database (SQLCipher)
+✅ Brute force RDP login → blocked
 
-🤝 Contributing
+✅ Risky port exposure (RDP, SMB, etc.)
 
-PRs welcome. Key areas: ETW integration, Linux/macOS ports, TPM PCR sealing, security audits.
+✅ Baseline file tampering
 
-bash
-git clone https://github.com/n33r4j1910/trust-sentinel.git
-cd trust-sentinel
-cargo build
+Things You Can Build On Top
 
-📚 Keywords
-endpoint-security trust-agent device-integrity tpm-2.0 hmac-sha256 trust-token zero-trust privacy-first offline rust windows-security intrusion-detection port-scan brute-force baseline-monitoring hardware-rooted-trust device-attestation integrity-verification open-source lightweight
+Real-time ETW event monitoring (currently polls every 5 min)
 
-📄 License
-MIT © 2026
+Credential file guard (SSH keys, browser passwords, cloud tokens)
+
+Linux support via eBPF + TPM2-TSS
+
+macOS support via Endpoint Security + Secure Enclave
+
+Remote attestation for fleet deployments
+
+Encrypted SQLite database
+
+Keywords
+endpoint-security trust-agent device-integrity tpm-2.0 hmac-sha256 zero-trust offline privacy-first rust windows-security intrusion-detection port-scan brute-force firewall self-healing hardware-rooted-trust device-attestation baseline-monitoring open-source lightweight no-cloud
+
+License
+MIT
