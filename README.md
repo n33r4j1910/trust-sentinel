@@ -112,22 +112,22 @@ Disk		<10 MB
 Network		None
 Runs fine on older laptops. Won't slow you down.
 
-How It Compares
+**How It Compares**
 
-Threat				Antivirus	Firewall	Trust Sentinel
-Known malware			✅		❌		❌
-Suspicious network traffic	❌		✅		✅ + blocks
-Hosts file hijacking		❌		❌		✅
-DNS poisoning			❌		❌		✅
-New startup persistence		⚠️		❌		✅
-Firewall disabled		❌		❌		✅
-Port scans			❌		❌		✅ + blocks
-Brute force logins		❌		❌		✅ + blocks
-Suspicious PowerShell		⚠️		❌		✅
-USB storage insertion		❌		❌		✅
-Ransomware behavior		⚠️		❌		✅
-Phishing domains		❌		❌		✅ (80K+ list)
-Hardware trust (TPM)		❌		❌		✅
+Threat				            Antivirus	Firewall	Trust Sentinel
+Known malware			          ✅		    ❌		      ❌
+Suspicious network traffic	❌		    ✅		      ✅ + blocks
+Hosts file hijacking		    ❌		    ❌		      ✅
+DNS poisoning			          ❌		    ❌		      ✅
+New startup persistence		  ⚠️		    ❌		      ✅
+Firewall disabled		        ❌		    ❌		      ✅
+Port scans			            ❌		    ❌		      ✅ + blocks
+Brute force logins		      ❌		    ❌		      ✅ + blocks
+Suspicious PowerShell		    ⚠️		    ❌		      ✅
+USB storage insertion		    ❌		    ❌		      ✅
+Ransomware behavior		      ⚠️		    ❌		      ✅
+Phishing domains		        ❌		    ❌		      ✅ (80K+ list)
+Hardware trust (TPM)		    ❌		    ❌		      ✅
 Privacy
 
 Everything stays on your device. Period, No accounts required, No API keys, No telemetry, No cloud uploads, HTTP server only accessible from your own machine
