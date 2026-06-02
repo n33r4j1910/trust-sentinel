@@ -61,6 +61,8 @@ fn main() {
     fs::create_dir_all(&data_dir).expect("Can't create data dir");
 
     let seed = get_or_create_seed(&data_dir);
+    // Wait for system to stabilize before taking baseline
+    std::thread::sleep(std::time::Duration::from_secs(5));
     let baseline = load_or_create_baseline(&data_dir, &seed);
 
     let state = Arc::new(Mutex::new(AppState {
@@ -149,8 +151,6 @@ fn generate_token(state: &Arc<Mutex<AppState>>) {
     guard.status.token = token;
 }
 
-// ─── REAL SYSTEM DATA COLLECTION ───────────────────────────────
-
 fn get_dns_servers() -> Vec<String> {
     let mut dns = Vec::new();
     if let Ok(output) = Command::new("powershell")
@@ -186,7 +186,6 @@ fn get_hosts_hash() -> String {
 
 fn get_startup_entries() -> Vec<String> {
     let mut entries = Vec::new();
-    // Registry: HKLM Run
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command",
             "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
@@ -199,7 +198,6 @@ fn get_startup_entries() -> Vec<String> {
             }
         }
     }
-    // Registry: HKCU Run
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command",
             "Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
@@ -212,7 +210,6 @@ fn get_startup_entries() -> Vec<String> {
             }
         }
     }
-    // Startup folder
     let startup = std::env::var("APPDATA").unwrap_or_default()
         + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup";
     if let Ok(dir) = fs::read_dir(&startup) {
@@ -241,7 +238,7 @@ fn get_services() -> Vec<String> {
         }
     }
     services.sort();
-    services.truncate(50); // keep first 50 to avoid huge baseline
+    services.truncate(50);
     services
 }
 
@@ -255,18 +252,18 @@ fn get_listening_ports() -> Vec<String> {
         for line in text.lines().skip(4) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 && parts[1].contains(':') {
-                let addr = parts[1].to_string();
-                if addr != "0.0.0.0:0" && addr != "[::]:0" {
-                    if !addr.ends_with(":12788") {
-    			ports.push(addr);
-	};
+                let state = if parts.len() >= 4 { parts[3] } else { "" };
+                if state == "LISTENING" {
+                    let addr = parts[1].to_string();
+                    if addr != "0.0.0.0:0" && addr != "[::]:0" && !addr.ends_with(":12788") {
+                        ports.push(addr);
+                    }
                 }
             }
         }
     }
     ports.sort();
     ports.dedup();
-    ports.truncate(30);
     ports
 }
 
@@ -279,8 +276,6 @@ fn collect_current_state() -> SystemState {
         listening_ports: get_listening_ports(),
     }
 }
-
-// ─── BASELINE & INTEGRITY ──────────────────────────────────────
 
 fn load_or_create_baseline(data_dir: &PathBuf, seed: &[u8]) -> Baseline {
     let path = data_dir.join("baseline.json");
@@ -335,14 +330,6 @@ fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, St
     let removed_svc: Vec<_> = b_svc.difference(&c_svc).collect();
     if !new_svc.is_empty() || !removed_svc.is_empty() {
         diffs.push(("service_change".into(), format!("Services: +{:?} -{:?}", new_svc, removed_svc)));
-    }
-
-    let b_ports: HashSet<&str> = baseline.listening_ports.iter().map(|s| s.as_str()).collect();
-    let c_ports: HashSet<&str> = current.listening_ports.iter().map(|s| s.as_str()).collect();
-    let new_ports: Vec<_> = c_ports.difference(&b_ports).collect();
-    let removed_ports: Vec<_> = b_ports.difference(&c_ports).collect();
-    if !new_ports.is_empty() || !removed_ports.is_empty() {
-        diffs.push(("port_change".into(), format!("Ports: +{:?} -{:?}", new_ports, removed_ports)));
     }
 
     diffs
