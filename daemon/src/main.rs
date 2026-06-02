@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -55,6 +55,8 @@ struct AppState {
     connection_history: HashMap<String, Vec<(u64, u16)>>, known_usb_devices: HashSet<String>, known_connections: HashSet<String>,
 }
 
+static PHISHING_BLOCKLIST: OnceLock<HashSet<String>> = OnceLock::new();
+
 fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
     use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
     let unbound = UnboundKey::new(&AES_256_GCM, key).unwrap();
@@ -90,7 +92,6 @@ fn get_encryption_key(seed: &[u8], tpm_available: bool) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-// ─── v3.5 HELPERS ───
 fn self_integrity_check() {
     let exe_path = std::env::current_exe().unwrap_or_default();
     if let Ok(data) = fs::read(&exe_path) {
@@ -141,6 +142,41 @@ fn log_event_direct(event_type: &str, details: &str, severity: &str) {
     }
 }
 
+// ─── v3.4: DNS PHISHING PROTECTION ───
+fn check_phishing_domains(state: &Arc<Mutex<AppState>>) {
+    let mut guard = state.lock().unwrap();
+    let hosts_path = PathBuf::from(DATA_DIR).join("phishing_hosts.txt");
+    if !hosts_path.exists() { return; }
+
+    let blocklist = PHISHING_BLOCKLIST.get_or_init(|| {
+        let mut set = HashSet::new();
+        if let Ok(content) = fs::read_to_string(&hosts_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.starts_with("0.0.0.0") || line.starts_with("127.0.0.1") {
+                    if let Some(domain) = line.split_whitespace().nth(1) {
+                        set.insert(domain.to_lowercase());
+                    }
+                }
+            }
+        }
+        set
+    });
+
+    if let Ok(o) = Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-DnsClientCache | Select-Object -ExpandProperty Entry | Where-Object { $_ -match '^[a-zA-Z]' }"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&o.stdout);
+        for entry in text.lines() {
+            let entry = entry.trim().to_lowercase();
+            if !entry.is_empty() && blocklist.contains(&entry) {
+                log_event(&mut guard, "phishing_domain", &format!("Phishing domain in DNS cache: {}", entry), "critical");
+            }
+        }
+    }
+}
+
 fn main() {
     let data_dir = PathBuf::from(DATA_DIR);
     fs::create_dir_all(&data_dir).expect("Can't create data dir");
@@ -163,6 +199,7 @@ fn main() {
     let state_cmds = state.clone(); std::thread::spawn(move || loop { check_suspicious_commands(&state_cmds); std::thread::sleep(Duration::from_secs(10)); });
     let state_usb = state.clone(); std::thread::spawn(move || loop { check_usb_devices(&state_usb); std::thread::sleep(Duration::from_secs(30)); });
     let state_conn = state.clone(); std::thread::spawn(move || loop { check_new_connections(&state_conn); std::thread::sleep(Duration::from_secs(15)); });
+    let state_phish = state.clone(); std::thread::spawn(move || loop { check_phishing_domains(&state_phish); std::thread::sleep(Duration::from_secs(60)); });
     let state_int = state.clone(); let s = state.clone(); std::thread::spawn(move || loop { let iv = s.lock().unwrap().settings.interval_integrity; check_integrity(&state_int); std::thread::sleep(Duration::from_secs(iv)); });
     let state_ids = state.clone(); let s2 = state.clone(); std::thread::spawn(move || loop { let iv = s2.lock().unwrap().settings.interval_intrusion; detect_intrusions(&state_ids); std::thread::sleep(Duration::from_secs(iv)); });
     loop { std::thread::sleep(Duration::from_secs(60)); }
