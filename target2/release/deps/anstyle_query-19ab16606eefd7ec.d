@@ -1,8 +1,0 @@
-C:\trust-sentinel\target2\release\deps\anstyle_query-19ab16606eefd7ec.d: C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\lib.rs C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\windows.rs
-
-C:\trust-sentinel\target2\release\deps\libanstyle_query-19ab16606eefd7ec.rlib: C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\lib.rs C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\windows.rs
-
-C:\trust-sentinel\target2\release\deps\libanstyle_query-19ab16606eefd7ec.rmeta: C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\lib.rs C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\windows.rs
-
-C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\lib.rs:
-C:\Users\N33r4j\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\anstyle-query-1.1.5\src\windows.rs:
