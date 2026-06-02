@@ -10,13 +10,24 @@ struct DaemonStatus {
     last_check: String,
 }
 
+fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
+    let mut rgba = Vec::new();
+    for _ in 0..(16 * 16) {
+        rgba.push(r);
+        rgba.push(g);
+        rgba.push(b);
+        rgba.push(255);
+    }
+    tray_icon::Icon::from_rgba(rgba, 16, 16).unwrap()
+}
+
 fn main() {
     let client = Client::new();
 
-    let icon_green = tray_icon::Icon::from_path("src/green.ico", None).unwrap();
-    let icon_yellow = tray_icon::Icon::from_path("src/yellow.ico", None).unwrap();
-    let icon_red = tray_icon::Icon::from_path("src/red.ico", None).unwrap();
-    let icon_gray = tray_icon::Icon::from_path("src/gray.ico", None).unwrap();
+    let icon_green = make_icon(0, 255, 0);
+    let icon_yellow = make_icon(255, 255, 0);
+    let icon_red = make_icon(255, 0, 0);
+    let icon_gray = make_icon(128, 128, 128);
 
     let mut tray = TrayIconBuilder::new()
         .with_icon(icon_gray.clone())
