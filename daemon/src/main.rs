@@ -393,9 +393,17 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
             }
         }
 
-        for (ip, ports) in &ip_port_map {
+                for (ip, ports) in &ip_port_map {
             if ports.len() > SCAN_THRESHOLD {
                 log_event(&mut guard, "port_scan", &format!("Port scan detected from IP: {} ({} ports)", ip, ports.len()), "critical");
+                // Block the attacker via Windows Firewall
+                let block_cmd = format!(
+                    "New-NetFirewallRule -DisplayName 'TrustSentinel-Block-{}' -Direction Inbound -RemoteAddress '{}' -Action Block -Profile Any",
+                    ip, ip
+                );
+                let _ = Command::new("powershell")
+                    .args(["-NoProfile", "-Command", &block_cmd])
+                    .output();
             }
         }
     }
@@ -421,8 +429,14 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
             .collect();
 
         let recent: Vec<u64> = failures.into_iter().filter(|t| now - t < 60).collect();
-        if recent.len() >= 5 {
+                if recent.len() >= 5 {
             log_event(&mut guard, "brute_force", &format!("Brute force attack detected: {} failed logins in 60 seconds", recent.len()), "critical");
+            // Block all inbound RDP (common brute force target)
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-Command",
+                    "Get-NetFirewallRule -DisplayName 'TrustSentinel-Block-RDP-Brute' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; New-NetFirewallRule -DisplayName 'TrustSentinel-Block-RDP-Brute' -Direction Inbound -LocalPort 3389 -Action Block -Profile Any"
+                ])
+                .output();
         }
     }
 }
