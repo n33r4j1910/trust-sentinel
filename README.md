@@ -1,250 +1,196 @@
-\# 🛡️ Trust Sentinel
+# 🛡️ Trust Sentinel
 
+**Lightweight, hardware-rooted endpoint trust agent for Windows.**
 
+> "Can this device still be trusted right now?" — Answered every 30 seconds using TPM 2.0.
 
-\*\*Lightweight device integrity guardian — "Can this device still be trusted right now?"\*\*
+[![Rust](https://img.shields.io/badge/Rust-1.96%2B-orange)](https://rustup.rs)
+[![Platform](https://img.shields.io/badge/Windows-10%2F11-blue)](https://github.com/n33r4j1910/trust-sentinel)
+[![TPM](https://img.shields.io/badge/TPM-2.0-green)](https://github.com/n33r4j1910/trust-sentinel)
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
+Trust Sentinel is **not** an antivirus, EDR, XDR, or SIEM. It is a **device integrity guardian** — a smoke alarm for trust that runs silently, uses minimal resources, and never calls home.
 
+---
 
-Trust Sentinel is \*\*not\*\* an antivirus, EDR, XDR, SIEM, or threat-hunting platform. It's a \*\*smoke alarm for device trust\*\*: always on, silent, and clear when something is wrong.
+## ✨ Features
 
+### 🔐 Trust Shield
+- **TPM 2.0 hardware-rooted** seed generation (`tpm_sealed: true`)
+- **HMAC-SHA256 rotating trust token** every 30 seconds (64-char hex)
+- Time-windowed tokens prevent replay attacks
+- Falls back to file-based seed if TPM unavailable
 
+### 📋 Integrity Monitoring (every 5 min)
+- DNS server changes
+- Hosts file modifications (SHA256 hash)
+- Startup entries (Registry + Startup folder)
+- Listening ports (TCP LISTENING only)
+- Windows Firewall profile changes
+- HMAC-signed baseline prevents tampering
 
-\---
+### 🔴 Intrusion Detection (every 10 sec)
+- **Port scan detection** — alerts on 20+ ports from single external IP
+- **Brute force detection** — 5+ failed logins in 60 seconds (Event ID 4625)
+- **Risky port alerts** — RDP, SMB, SSH, Telnet, and 13 more
+- **Firewall change monitoring** — detects disabled profiles
 
+### 🖥️ System Tray
+- 🟢 Trusted / 🟡 Warning / 🔴 Compromised
+- Round icon, updates every 2 seconds
+- Silent startup, no popup windows
 
+### 🔄 Self-Healing
+- Watchdog auto-restarts daemon + tray if crashed
+- Auto-resets baseline after repeated legitimate changes
 
-\## How It Works
+### 🚫 Privacy-First
+- 100% offline — zero cloud, zero telemetry, zero accounts
+- HTTP server binds to `127.0.0.1` only
+- All data stored locally in `C:\ProgramData\Trust Sentinel\`
 
+---
 
+## 🚀 Quick Start
 
-| Engine | Description |
+### Prerequisites
+- Windows 10/11 (64-bit)
+- [Rust](https://rustup.rs) (MSVC toolchain)
+- TPM 2.0 (optional — falls back to file-based seed)
 
-|--------|-------------|
-
-| \*\*Trust Shield\*\* | Rotating HMAC-SHA256 token generated every 30 seconds from a device-bound secret |
-
-| \*\*Baseline Engine\*\* | Captures DNS, hosts file hash, startup entries, services, and listening ports on first run |
-
-| \*\*Integrity Engine\*\* | Compares current system state against baseline every 5 minutes |
-
-| \*\*Trust State\*\* | 🟢 Trusted / 🟡 Warning / 🔴 Compromised |
-
-
-
-\---
-
-
-
-\## Features
-
-
-
-\- 🔐 Rotating trust token (HMAC-SHA256, 64-char hex, refreshes every 30s)
-
-\- 📋 Real system data: DNS, hosts, startup, services, listening ports
-
-\- 🔍 Tamper detection — hosts file modification, new services, DNS changes
-
-\- 📝 Local event logging with timestamps and severity
-
-\- ⚡ <0.1% CPU, \~25MB RAM
-
-\- 🚫 100% offline — no cloud, no API keys, no telemetry
-
-\- 🔄 Auto-starts on login
-
-
-
-\---
-
-
-
-\## Quick Start
-
-
-
-\### Prerequisites
-
-\- Windows 10/11 (64-bit)
-
-\- \[Rust](https://rustup.rs) (MSVC toolchain)
-
-
-
-\### Build \& Run
-
+### Build
 ```bash
-
 git clone https://github.com/n33r4j1910/trust-sentinel.git
-
 cd trust-sentinel
-
 cargo build --release
 
-target\\release\\trust-sentinel-daemon.exe
-
-
-
-
-
-Open http://127.0.0.1:12788 in your browser.
-
-
+Run
+bash
+target\release\trust-sentinel-daemon.exe
+Open http://127.0.0.1:12788
 
 Auto-Start
+Shortcut installed at:
 
-Shortcut is in: %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\TrustSentinel.lnk
+text
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\TrustSentinel.lnk
+📊 Resource Footprint
+Metric	Value
+CPU (idle)	<0.1%
+RAM	~25-30 MB
+Disk	<5 MB
+Network	None (localhost only)
+Battery	Negligible
 
+🏗️ Architecture
 
+text
+trust-sentinel/
+├── daemon/                  # Background trust engine
+│   ├── Cargo.toml
+│   └── src/main.rs          # TPM, token, integrity, intrusion detection
+├── tray/                    # System tray application
+│   ├── Cargo.toml
+│   └── src/main.rs          # Live trust status icon
+├── start.bat                # Silent launcher + watchdog loop
+└── Cargo.toml               # Workspace root
+Runtime data: C:\ProgramData\Trust Sentinel\
 
-API
+tpm_seed.bin — TPM 2.0 generated seed
+
+seed.bin — File-based fallback seed
+
+baseline.json — HMAC-signed system snapshot
+
+events.log — JSON-lines security event log
+
+📡 API
 
 GET http://127.0.0.1:12788
 
-
-
 json
-
 {
-
-&#x20; "trust\_state": "Trusted",
-
-&#x20; "token": "a3f2c1b8d5e6f7a9...",
-
-&#x20; "last\_check": "2026-06-01T12:00:00Z",
-
-&#x20; "latest\_events": \[]
-
+  "trust_state": "Trusted",
+  "token": "a3f2c1b8d5e6f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2",
+  "tpm_sealed": true,
+  "last_check": "2026-06-02T12:00:00Z",
+  "latest_events": []
 }
 
-Project Structure
+🔒 Security
 
-text
+Layer	Mechanism
+Seed generation	TPM 2.0 RNGCryptoServiceProvider
+Token	HMAC-SHA256, 30-second time window
+Baseline integrity	HMAC-SHA256 signature verified every read
+Replay prevention	Time-windowed tokens expire after 30s
+Network	Localhost-only HTTP, zero external connections
+Tamper detection	Signature mismatch → immediate Compromised state
 
-trust-sentinel/
+🧪 Tested Attack Scenarios
+✅ Hosts file modification → Detected
 
-├── daemon/src/main.rs    # Core engine (trust token, baseline, integrity)
+✅ DNS server change → Detected
 
-├── tray/src/main.rs      # System tray app (WIP)
+✅ New startup entry → Detected
 
-└── Cargo.toml            # Workspace config
+✅ Firewall profile change → Detected
 
-Runtime data: C:\\ProgramData\\Trust Sentinel\\
+✅ Port scan simulation → Detected
 
+✅ Brute force login → Detected
 
+✅ Agent termination → Watchdog restarts
 
-seed.bin — device secret
-
-
-
-baseline.json — HMAC-signed snapshot
-
-
-
-events.log — security events
-
-
-
-Security
-
-HMAC-SHA256 signed baseline (tamper detection)
+✅ Baseline tampering → Signature mismatch alert
 
 
+📋 Trust States
 
-Time-windowed tokens (replay prevention)
+State	Condition	Icon
+Trusted	Zero unauthorized changes	🟢
+Warning	One change detected	🟡
+Compromised	Multiple changes or tampering	🔴
 
+🛣️ Roadmap
 
+Rotating trust token (HMAC-SHA256)
 
-Localhost-only HTTP (no network exposure)
+TPM 2.0 hardware-rooted seed
 
+System baseline monitoring
 
+Intrusion detection (port scan, brute force, risky ports)
 
-TPM 2.0 sealing planned
+System tray with live status
 
+Watchdog auto-restart
 
-
-Roadmap
-
-Rotating trust token
-
-
-
-Real system data collection
-
-
-
-Integrity monitoring
-
-
-
-Windows auto-start
-
-
-
-TPM 2.0 hardware-rooted trust
-
-
+Auto-healing baseline
 
 Real-time ETW event monitoring
 
+Credential file guard (SSH keys, browser passwords)
 
+Linux support (eBPF + TPM2-TSS)
 
-Credential file guard
+macOS support (Endpoint Security + Secure Enclave)
 
+Remote attestation (optional, privacy-preserving)
 
+Encrypted local database (SQLCipher)
 
-Linux \& macOS support
+🤝 Contributing
 
-
-
-Working tray icon
-
-
-
-Contributing
-
-PRs welcome! Key areas: TPM integration, ETW monitoring, Linux/macOS ports, tray icon.
-
-
+PRs welcome. Key areas: ETW integration, Linux/macOS ports, TPM PCR sealing, security audits.
 
 bash
-
 git clone https://github.com/n33r4j1910/trust-sentinel.git
-
 cd trust-sentinel
-
 cargo build
 
-Keywords
+📚 Keywords
+endpoint-security trust-agent device-integrity tpm-2.0 hmac-sha256 trust-token zero-trust privacy-first offline rust windows-security intrusion-detection port-scan brute-force baseline-monitoring hardware-rooted-trust device-attestation integrity-verification open-source lightweight
 
-endpoint-security trust-agent device-integrity hmac-sha256 trust-token zero-trust privacy-first offline-security rust-security windows-security tpm baseline-monitoring integrity-verification open-source-security
-
-
-
+📄 License
 MIT © 2026
-
-
-
-"Maximum security value per CPU cycle consumed."
-
-
-
-text
-
-
-
-Save, close. Then push:
-
-
-
-```cmd
-
-cd C:\\trust-sentinel
-
-git add README.md
-
-git commit -m "Update README with real data collection features"
-
-git push
-
