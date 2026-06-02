@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -18,13 +18,19 @@ type HmacSha256 = Hmac<Sha256>;
 const DATA_DIR: &str = "C:\\ProgramData\\Trust Sentinel";
 const HTTP_PORT: u16 = 12788;
 
+// High-risk ports to alert on
+const RISKY_PORTS: &[u16] = &[21, 22, 23, 135, 139, 445, 3389, 5985, 5986, 6379, 27017, 3306, 5432, 1433, 8080, 8443, 9090];
+
+// Scan threshold: >20 connections to different ports from same IP in 10 seconds = port scan
+const SCAN_THRESHOLD: usize = 20;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct SystemState {
     dns_servers: Vec<String>,
     hosts_hash: String,
     startup_entries: Vec<String>,
-    services: Vec<String>,
     listening_ports: Vec<String>,
+    firewall_profiles: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -54,6 +60,9 @@ struct AppState {
     events: Vec<Event>,
     baseline: Option<Baseline>,
     seed: Vec<u8>,
+    // For port scan detection
+    connection_history: HashMap<String, Vec<(u64, u16)>>, // IP -> [(timestamp, port)]
+    brute_force_attempts: HashMap<String, Vec<u64>>, // service -> [timestamps]
 }
 
 fn main() {
@@ -61,7 +70,6 @@ fn main() {
     fs::create_dir_all(&data_dir).expect("Can't create data dir");
 
     let seed = get_or_create_seed(&data_dir);
-    // Wait for system to stabilize before taking baseline
     std::thread::sleep(std::time::Duration::from_secs(5));
     let baseline = load_or_create_baseline(&data_dir, &seed);
 
@@ -75,6 +83,8 @@ fn main() {
         events: vec![],
         baseline: Some(baseline),
         seed,
+        connection_history: HashMap::new(),
+        brute_force_attempts: HashMap::new(),
     }));
 
     // HTTP server
@@ -108,6 +118,13 @@ fn main() {
     std::thread::spawn(move || loop {
         check_integrity(&state_integrity);
         std::thread::sleep(Duration::from_secs(300));
+    });
+
+    // Port scan / brute force detector (runs every 10 seconds)
+    let state_intrusion = state.clone();
+    std::thread::spawn(move || loop {
+        detect_intrusions(&state_intrusion);
+        std::thread::sleep(Duration::from_secs(10));
     });
 
     loop {
@@ -169,9 +186,7 @@ fn get_dns_servers() -> Vec<String> {
             }
         }
     }
-    if dns.is_empty() {
-        dns.push("Unknown".into());
-    }
+    if dns.is_empty() { dns.push("Unknown".into()); }
     dns
 }
 
@@ -189,25 +204,19 @@ fn get_startup_entries() -> Vec<String> {
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command",
             "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
-        ])
-        .output()
+        ]).output()
     {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if !line.trim().is_empty() {
-                entries.push(line.trim().to_string());
-            }
+            if !line.trim().is_empty() { entries.push(line.trim().to_string()); }
         }
     }
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command",
             "Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSObject.Properties | Where-Object { $_.Name -ne 'PSPath' -and $_.Name -ne 'PSParentPath' } | ForEach-Object { $_.Name + '=' + $_.Value }"
-        ])
-        .output()
+        ]).output()
     {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if !line.trim().is_empty() {
-                entries.push(line.trim().to_string());
-            }
+            if !line.trim().is_empty() { entries.push(line.trim().to_string()); }
         }
     }
     let startup = std::env::var("APPDATA").unwrap_or_default()
@@ -217,37 +226,13 @@ fn get_startup_entries() -> Vec<String> {
             entries.push(format!("StartupFolder: {}", entry.file_name().to_string_lossy()));
         }
     }
-    if entries.is_empty() {
-        entries.push("None".into());
-    }
+    if entries.is_empty() { entries.push("None".into()); }
     entries
-}
-
-fn get_services() -> Vec<String> {
-    let mut services = Vec::new();
-    if let Ok(output) = Command::new("powershell")
-        .args(["-NoProfile", "-Command",
-            "Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object -ExpandProperty Name"
-        ])
-        .output()
-    {
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if !line.trim().is_empty() {
-                services.push(line.trim().to_string());
-            }
-        }
-    }
-    services.sort();
-    services.truncate(50);
-    services
 }
 
 fn get_listening_ports() -> Vec<String> {
     let mut ports = Vec::new();
-    if let Ok(output) = Command::new("netstat")
-        .args(["-ano", "-p", "TCP"])
-        .output()
-    {
+    if let Ok(output) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines().skip(4) {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -267,13 +252,27 @@ fn get_listening_ports() -> Vec<String> {
     ports
 }
 
+fn get_firewall_profiles() -> Vec<String> {
+    let mut profiles = Vec::new();
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-NetFirewallProfile | Select-Object Name, Enabled | ForEach-Object { $_.Name + ':' + ($_.Enabled ? 'ON' : 'OFF') }"])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if !line.trim().is_empty() { profiles.push(line.trim().to_string()); }
+        }
+    }
+    if profiles.is_empty() { profiles.push("Unknown".into()); }
+    profiles
+}
+
 fn collect_current_state() -> SystemState {
     SystemState {
         dns_servers: get_dns_servers(),
         hosts_hash: get_hosts_hash(),
         startup_entries: get_startup_entries(),
-        services: get_services(),
         listening_ports: get_listening_ports(),
+        firewall_profiles: get_firewall_profiles(),
     }
 }
 
@@ -283,9 +282,7 @@ fn load_or_create_baseline(data_dir: &PathBuf, seed: &[u8]) -> Baseline {
         if let Ok(data) = fs::read_to_string(&path) {
             if let Ok(baseline) = serde_json::from_str::<Baseline>(&data) {
                 let expected = sign_state(&baseline.state, seed);
-                if expected == baseline.signature {
-                    return baseline;
-                }
+                if expected == baseline.signature { return baseline; }
             }
         }
     }
@@ -324,15 +321,88 @@ fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, St
         diffs.push(("startup_change".into(), format!("Startup: +{:?} -{:?}", new_startup, removed_startup)));
     }
 
-    let b_svc: HashSet<&str> = baseline.services.iter().map(|s| s.as_str()).collect();
-    let c_svc: HashSet<&str> = current.services.iter().map(|s| s.as_str()).collect();
-    let new_svc: Vec<_> = c_svc.difference(&b_svc).collect();
-    let removed_svc: Vec<_> = b_svc.difference(&c_svc).collect();
-    if !new_svc.is_empty() || !removed_svc.is_empty() {
-        diffs.push(("service_change".into(), format!("Services: +{:?} -{:?}", new_svc, removed_svc)));
+    // Check for risky ports
+    for port_binding in &current.listening_ports {
+        if let Some(port_str) = port_binding.split(':').last() {
+            if let Ok(port) = port_str.parse::<u16>() {
+                if RISKY_PORTS.contains(&port) {
+                    diffs.push(("risky_port".into(), format!("High-risk port exposed: {} (port {})", port_binding, port)));
+                }
+            }
+        }
+    }
+
+    let b_fw: HashSet<&str> = baseline.firewall_profiles.iter().map(|s| s.as_str()).collect();
+    let c_fw: HashSet<&str> = current.firewall_profiles.iter().map(|s| s.as_str()).collect();
+    if b_fw != c_fw {
+        diffs.push(("firewall_change".into(), format!("Firewall changed: {:?} -> {:?}", baseline.firewall_profiles, current.firewall_profiles)));
     }
 
     diffs
+}
+
+fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
+    let mut guard = state.lock().unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+    // Check established connections for port scanning
+    if let Ok(output) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut ip_port_map: HashMap<String, HashSet<u16>> = HashMap::new();
+
+        for line in text.lines().skip(4) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[3] == "ESTABLISHED" {
+                let local = parts[1];
+                let remote = parts[2];
+                if let Some(remote_ip) = remote.rsplitn(2, ':').nth(1) {
+                    if let Some(port_str) = remote.split(':').last() {
+                        if let Ok(port) = port_str.parse::<u16>() {
+                            // Skip localhost and private IPs for scan detection
+                            if !remote_ip.starts_with("127.") && !remote_ip.starts_with("192.168.") && !remote_ip.starts_with("10.") && !remote_ip.starts_with("172.16.") {
+                                ip_port_map.entry(remote_ip.to_string()).or_default().insert(port);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (ip, ports) in &ip_port_map {
+            if ports.len() > SCAN_THRESHOLD {
+                log_event(&mut guard, "port_scan", &format!("Port scan detected from IP: {} ({} ports)", ip, ports.len()), "critical");
+            }
+        }
+    }
+
+    // Check Windows Security Event Log for brute force attempts (Event ID 4625)
+    if let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625} -MaxEvents 10 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + '|' + $_.Message }"
+        ])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let failures: Vec<u64> = text.lines()
+            .filter(|l| l.contains("Failure"))
+            .filter_map(|l| {
+                if let Some(ts_str) = l.split('|').next() {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                        return Some(dt.timestamp() as u64);
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let recent: Vec<u64> = failures.into_iter().filter(|t| now - t < 60).collect();
+        if recent.len() >= 5 {
+            log_event(&mut guard, "brute_force", &format!("Brute force attack detected: {} failed logins in 60 seconds", recent.len()), "critical");
+        }
+    }
+
+    // Clean old entries
+    let _ = guard.connection_history.remove(&String::new());
 }
 
 fn log_event(state: &mut AppState, event_type: &str, details: &str, severity: &str) {
@@ -366,19 +436,16 @@ fn check_integrity(state: &Arc<Mutex<AppState>>) {
     for diff in &diffs {
         log_event(&mut guard, &diff.0, &diff.1, "warning");
     }
-        guard.status.trust_state = match diffs.len() {
+    guard.status.trust_state = match diffs.len() {
         0 => "Trusted",
         1 => "Warning",
         _ => "Compromised",
-    }
-    .into();
+    }.into();
     guard.status.last_check = Utc::now().to_rfc3339();
     guard.status.latest_events = guard.events.iter().rev().take(5).cloned().collect();
 
-    // Auto-heal: If Warning for 2+ checks, reset baseline (likely legitimate change)
-    let warning_count = guard.events.iter()
-        .filter(|e| e.severity == "warning")
-        .count();
+    // Auto-heal
+    let warning_count = guard.events.iter().filter(|e| e.severity == "warning").count();
     if warning_count > 3 {
         let current = collect_current_state();
         let sig = sign_state(&current, &guard.seed);
