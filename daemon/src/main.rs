@@ -7,6 +7,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -18,10 +19,7 @@ type HmacSha256 = Hmac<Sha256>;
 const DATA_DIR: &str = "C:\\ProgramData\\Trust Sentinel";
 const HTTP_PORT: u16 = 12788;
 
-// High-risk ports to alert on
 const RISKY_PORTS: &[u16] = &[21, 22, 23, 135, 139, 445, 3389, 5985, 5986, 6379, 27017, 3306, 5432, 1433, 8080, 8443, 9090];
-
-// Scan threshold: >20 connections to different ports from same IP in 10 seconds = port scan
 const SCAN_THRESHOLD: usize = 20;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -51,6 +49,7 @@ struct Event {
 struct DaemonStatus {
     trust_state: String,
     token: String,
+    tpm_sealed: bool,
     last_check: String,
     latest_events: Vec<Event>,
 }
@@ -60,16 +59,16 @@ struct AppState {
     events: Vec<Event>,
     baseline: Option<Baseline>,
     seed: Vec<u8>,
-    // For port scan detection
-    connection_history: HashMap<String, Vec<(u64, u16)>>, // IP -> [(timestamp, port)]
-    brute_force_attempts: HashMap<String, Vec<u64>>, // service -> [timestamps]
+    tpm_available: bool,
+    connection_history: HashMap<String, Vec<(u64, u16)>>,
+    brute_force_attempts: HashMap<String, Vec<u64>>,
 }
 
 fn main() {
     let data_dir = PathBuf::from(DATA_DIR);
     fs::create_dir_all(&data_dir).expect("Can't create data dir");
 
-    let seed = get_or_create_seed(&data_dir);
+    let (seed, tpm_available) = get_or_create_seed(&data_dir);
     std::thread::sleep(std::time::Duration::from_secs(5));
     let baseline = load_or_create_baseline(&data_dir, &seed);
 
@@ -77,17 +76,18 @@ fn main() {
         status: DaemonStatus {
             trust_state: "Initialising".into(),
             token: String::new(),
+            tpm_sealed: tpm_available,
             last_check: Utc::now().to_rfc3339(),
             latest_events: vec![],
         },
         events: vec![],
         baseline: Some(baseline),
         seed,
+        tpm_available,
         connection_history: HashMap::new(),
         brute_force_attempts: HashMap::new(),
     }));
 
-    // HTTP server
     let state_http = state.clone();
     std::thread::spawn(move || {
         let listener = TcpListener::bind(("127.0.0.1", HTTP_PORT)).unwrap();
@@ -106,21 +106,18 @@ fn main() {
         }
     });
 
-    // Token generator
     let state_token = state.clone();
     std::thread::spawn(move || loop {
         generate_token(&state_token);
         std::thread::sleep(Duration::from_secs(30));
     });
 
-    // Integrity checker
     let state_integrity = state.clone();
     std::thread::spawn(move || loop {
         check_integrity(&state_integrity);
         std::thread::sleep(Duration::from_secs(300));
     });
 
-    // Port scan / brute force detector (runs every 10 seconds)
     let state_intrusion = state.clone();
     std::thread::spawn(move || loop {
         detect_intrusions(&state_intrusion);
@@ -132,19 +129,51 @@ fn main() {
     }
 }
 
-fn get_or_create_seed(data_dir: &PathBuf) -> Vec<u8> {
+fn get_or_create_seed(data_dir: &PathBuf) -> (Vec<u8>, bool) {
+    // Try TPM first
+    if let Ok(tpm_seed) = get_tpm_seed(data_dir) {
+        return (tpm_seed, true);
+    }
+    // Fallback to file-based seed
     let seed_path = data_dir.join("seed.bin");
-    if seed_path.exists() {
+    let seed = if seed_path.exists() {
         fs::read(&seed_path).unwrap_or_else(|_| {
-            let seed = random_seed();
-            fs::write(&seed_path, &seed).ok();
-            seed
+            let s = random_seed();
+            fs::write(&seed_path, &s).ok();
+            s
         })
     } else {
-        let seed = random_seed();
-        fs::write(&seed_path, &seed).expect("Failed to write seed");
-        seed
+        let s = random_seed();
+        fs::write(&seed_path, &s).expect("Failed to write seed");
+        s
+    };
+    (seed, false)
+}
+
+fn get_tpm_seed(data_dir: &PathBuf) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let tpm_seed_path = data_dir.join("tpm_seed.bin");
+
+    // If we already have a TPM seed, return it
+    if tpm_seed_path.exists() {
+        return Ok(fs::read(&tpm_seed_path)?);
     }
+
+    // Generate new seed using TPM-backed randomness
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command",
+            "$tpm = Get-Tpm; if($tpm.TpmReady -and $tpm.TpmEnabled -and $tpm.TpmActivated) { $bytes = New-Object Byte[] 32; (New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($bytes); [Convert]::ToBase64String($bytes) } else { Write-Error 'TPM not ready' }"
+        ])
+        .output()?;
+
+    if output.status.success() {
+        let b64 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !b64.is_empty() {
+            let seed = base64::engine::general_purpose::STANDARD.decode(&b64)?;
+            fs::write(&tpm_seed_path, &seed)?;
+            return Ok(seed);
+        }
+    }
+    Err("TPM not available".into())
 }
 
 fn random_seed() -> Vec<u8> {
@@ -166,6 +195,7 @@ fn generate_token(state: &Arc<Mutex<AppState>>) {
     mac.update(&counter.to_be_bytes());
     let token = hex::encode(mac.finalize().into_bytes());
     guard.status.token = token;
+    guard.status.tpm_sealed = guard.tpm_available;
 }
 
 fn get_dns_servers() -> Vec<String> {
@@ -321,7 +351,6 @@ fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, St
         diffs.push(("startup_change".into(), format!("Startup: +{:?} -{:?}", new_startup, removed_startup)));
     }
 
-    // Check for risky ports
     for port_binding in &current.listening_ports {
         if let Some(port_str) = port_binding.split(':').last() {
             if let Ok(port) = port_str.parse::<u16>() {
@@ -343,9 +372,7 @@ fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, St
 
 fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
     let mut guard = state.lock().unwrap();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-    // Check established connections for port scanning
     if let Ok(output) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
         let text = String::from_utf8_lossy(&output.stdout);
         let mut ip_port_map: HashMap<String, HashSet<u16>> = HashMap::new();
@@ -353,12 +380,10 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
         for line in text.lines().skip(4) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 && parts[3] == "ESTABLISHED" {
-                let local = parts[1];
                 let remote = parts[2];
                 if let Some(remote_ip) = remote.rsplitn(2, ':').nth(1) {
                     if let Some(port_str) = remote.split(':').last() {
                         if let Ok(port) = port_str.parse::<u16>() {
-                            // Skip localhost and private IPs for scan detection
                             if !remote_ip.starts_with("127.") && !remote_ip.starts_with("192.168.") && !remote_ip.starts_with("10.") && !remote_ip.starts_with("172.16.") {
                                 ip_port_map.entry(remote_ip.to_string()).or_default().insert(port);
                             }
@@ -375,7 +400,6 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
         }
     }
 
-    // Check Windows Security Event Log for brute force attempts (Event ID 4625)
     if let Ok(output) = Command::new("powershell")
         .args(["-NoProfile", "-Command",
             "Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4625} -MaxEvents 10 -ErrorAction SilentlyContinue | ForEach-Object { $_.TimeCreated.ToString('o') + '|' + $_.Message }"
@@ -383,6 +407,7 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
         .output()
     {
         let text = String::from_utf8_lossy(&output.stdout);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         let failures: Vec<u64> = text.lines()
             .filter(|l| l.contains("Failure"))
             .filter_map(|l| {
@@ -400,9 +425,6 @@ fn detect_intrusions(state: &Arc<Mutex<AppState>>) {
             log_event(&mut guard, "brute_force", &format!("Brute force attack detected: {} failed logins in 60 seconds", recent.len()), "critical");
         }
     }
-
-    // Clean old entries
-    let _ = guard.connection_history.remove(&String::new());
 }
 
 fn log_event(state: &mut AppState, event_type: &str, details: &str, severity: &str) {
@@ -444,7 +466,6 @@ fn check_integrity(state: &Arc<Mutex<AppState>>) {
     guard.status.last_check = Utc::now().to_rfc3339();
     guard.status.latest_events = guard.events.iter().rev().take(5).cloned().collect();
 
-    // Auto-heal
     let warning_count = guard.events.iter().filter(|e| e.severity == "warning").count();
     if warning_count > 3 {
         let current = collect_current_state();
