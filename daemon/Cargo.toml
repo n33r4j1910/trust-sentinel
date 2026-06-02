@@ -1,6 +1,6 @@
 [package]
 name = "trust-sentinel-daemon"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 
 [dependencies]
@@ -14,3 +14,19 @@ env_logger = "0.11"
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
+windows = { version = "0.58", features = [
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_Security",
+    "Win32_Security_Credentials",
+    "Win32_System_Threading",
+    "Win32_System_SystemServices",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_Shell",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_System_Power",
+] }
