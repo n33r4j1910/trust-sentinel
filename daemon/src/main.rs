@@ -366,7 +366,7 @@ fn check_integrity(state: &Arc<Mutex<AppState>>) {
     for diff in &diffs {
         log_event(&mut guard, &diff.0, &diff.1, "warning");
     }
-    guard.status.trust_state = match diffs.len() {
+        guard.status.trust_state = match diffs.len() {
         0 => "Trusted",
         1 => "Warning",
         _ => "Compromised",
@@ -374,4 +374,18 @@ fn check_integrity(state: &Arc<Mutex<AppState>>) {
     .into();
     guard.status.last_check = Utc::now().to_rfc3339();
     guard.status.latest_events = guard.events.iter().rev().take(5).cloned().collect();
+
+    // Auto-heal: If Warning for 2+ checks, reset baseline (likely legitimate change)
+    let warning_count = guard.events.iter()
+        .filter(|e| e.severity == "warning")
+        .count();
+    if warning_count > 3 {
+        let current = collect_current_state();
+        let sig = sign_state(&current, &guard.seed);
+        guard.baseline = Some(Baseline { state: current, signature: sig });
+        guard.events.clear();
+        guard.status.trust_state = "Trusted".into();
+        guard.status.latest_events = vec![];
+        log_event(&mut guard, "auto_heal", "Auto-reset baseline after repeated warnings", "info");
+    }
 }

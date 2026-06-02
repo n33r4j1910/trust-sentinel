@@ -11,14 +11,28 @@ struct DaemonStatus {
 }
 
 fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
+    let size = 16;
     let mut rgba = Vec::new();
-    for _ in 0..(16 * 16) {
-        rgba.push(r);
-        rgba.push(g);
-        rgba.push(b);
-        rgba.push(255);
+    let center = size as f32 / 2.0;
+    let radius = size as f32 / 2.0 - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - center;
+            let dy = y as f32 + 0.5 - center;
+            if (dx * dx + dy * dy).sqrt() <= radius {
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                rgba.push(255);
+            } else {
+                rgba.push(0);
+                rgba.push(0);
+                rgba.push(0);
+                rgba.push(0);
+            }
+        }
     }
-    tray_icon::Icon::from_rgba(rgba, 16, 16).unwrap()
+    tray_icon::Icon::from_rgba(rgba, size as u32, size as u32).unwrap()
 }
 
 fn main() {
