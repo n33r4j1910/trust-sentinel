@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trust Sentinel - Settings</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 20px; max-width: 700px; margin: auto; }
+h1 { color: #00ff88; margin-bottom: 5px; }
+h2 { color: #00ccff; margin: 20px 0 10px; border-bottom: 1px solid #333; padding-bottom: 5px; }
+.status { background: #16213e; padding: 15px; border-radius: 8px; margin: 15px 0; }
+.trusted { color: #00ff88; }
+.warning { color: #ffcc00; }
+.compromised { color: #ff4444; }
+label { display: block; margin: 10px 0 5px; font-weight: bold; }
+input, select { width: 100%; padding: 8px; background: #0f3460; border: 1px solid #333; color: #fff; border-radius: 4px; }
+button { background: #00ff88; color: #000; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+button:hover { background: #00cc66; }
+.event { background: #16213e; padding: 8px 12px; margin: 5px 0; border-radius: 4px; font-size: 14px; }
+.event.critical { border-left: 3px solid #ff4444; }
+.event.warning { border-left: 3px solid #ffcc00; }
+.event.info { border-left: 3px solid #00ccff; }
+.toggle { position: relative; display: inline-block; width: 50px; height: 24px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .3s; border-radius: 24px; }
+.slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+input:checked + .slider { background-color: #00ff88; }
+input:checked + .slider:before { transform: translateX(26px); }
+.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+#token { font-family: monospace; word-break: break-all; font-size: 13px; color: #888; }
+</style>
+</head>
+<body>
+<h1>🛡️ Trust Sentinel</h1>
+<p>Device Trust Agent v2.0</p>
+
+<div class="status">
+<strong>Status:</strong> <span id="state" class="trusted">Loading...</span> |
+<strong>TPM:</strong> <span id="tpm">-</span> |
+<strong>Last Check:</strong> <span id="last">-</span>
+<div id="token"></div>
+</div>
+
+<h2>⚙️ Monitoring</h2>
+<div class="row"><span>DNS Monitoring</span><label class="toggle"><input type="checkbox" id="dns" checked onchange="saveSetting('dns')"><span class="slider"></span></label></div>
+<div class="row"><span>Hosts File Monitoring</span><label class="toggle"><input type="checkbox" id="hosts" checked onchange="saveSetting('hosts')"><span class="slider"></span></label></div>
+<div class="row"><span>Startup Monitoring</span><label class="toggle"><input type="checkbox" id="startup" checked onchange="saveSetting('startup')"><span class="slider"></span></label></div>
+<div class="row"><span>Port Monitoring</span><label class="toggle"><input type="checkbox" id="ports" checked onchange="saveSetting('ports')"><span class="slider"></span></label></div>
+<div class="row"><span>Firewall Monitoring</span><label class="toggle"><input type="checkbox" id="firewall" checked onchange="saveSetting('firewall')"><span class="slider"></span></label></div>
+<div class="row"><span>Credential Guard</span><label class="toggle"><input type="checkbox" id="creds" checked onchange="saveSetting('creds')"><span class="slider"></span></label></div>
+<div class="row"><span>Command Monitoring</span><label class="toggle"><input type="checkbox" id="commands" checked onchange="saveSetting('commands')"><span class="slider"></span></label></div>
+<div class="row"><span>USB Device Alerts</span><label class="toggle"><input type="checkbox" id="usb" checked onchange="saveSetting('usb')"><span class="slider"></span></label></div>
+<div class="row"><span>Connection Monitoring</span><label class="toggle"><input type="checkbox" id="connections" checked onchange="saveSetting('connections')"><span class="slider"></span></label></div>
+<div class="row"><span>Windows Update Status</span><label class="toggle"><input type="checkbox" id="updates" checked onchange="saveSetting('updates')"><span class="slider"></span></label></div>
+
+<h2>🔴 Intrusion Prevention</h2>
+<div class="row"><span>Auto-block Port Scanners</span><label class="toggle"><input type="checkbox" id="block_scan" checked onchange="saveSetting('block_scan')"><span class="slider"></span></label></div>
+<div class="row"><span>Auto-block Brute Force</span><label class="toggle"><input type="checkbox" id="block_brute" checked onchange="saveSetting('block_brute')"><span class="slider"></span></label></div>
+
+<h2>⏱️ Intervals</h2>
+<label>Integrity Check (seconds):</label>
+<input type="number" id="interval_integrity" value="300" min="60" max="3600" onchange="saveSetting('interval_integrity')">
+<label>Intrusion Check (seconds):</label>
+<input type="number" id="interval_intrusion" value="10" min="5" max="300" onchange="saveSetting('interval_intrusion')">
+
+<h2>📋 Recent Events</h2>
+<div id="events">Loading...</div>
+
+<button onclick="resetBaseline()">🔄 Reset Baseline</button>
+<button onclick="exportLogs()">📥 Export Logs</button>
+
+<script>
+const API = 'http://127.0.0.1:12788';
+async function refresh() {
+    try {
+        let r = await fetch(API), d = await r.json();
+        document.getElementById('state').textContent = d.trust_state;
+        document.getElementById('state').className = d.trust_state.toLowerCase();
+        document.getElementById('tpm').textContent = d.tpm_sealed ? '✅ Active' : '⚠️ Fallback';
+        document.getElementById('last').textContent = new Date(d.last_check).toLocaleTimeString();
+        document.getElementById('token').textContent = 'Token: ' + (d.token||'').substring(0,16) + '...';
+        let ev = d.latest_events || [];
+        document.getElementById('events').innerHTML = ev.map(e => 
+            `<div class="event ${e.severity}"><strong>${e.event_type}</strong> - ${e.details}<br><small>${new Date(e.timestamp).toLocaleTimeString()}</small></div>`
+        ).join('') || 'No recent events';
+    } catch(e) { document.getElementById('state').textContent = 'Daemon offline'; }
+}
+async function saveSetting(key) {
+    let val = document.getElementById(key).value || document.getElementById(key).checked;
+    try { await fetch(API+'/settings', {method:'POST', body: JSON.stringify({[key]:val})}); } catch(e) {}
+}
+async function resetBaseline() {
+    if(confirm('Reset baseline to current system state?')) {
+        try { await fetch(API+'/reset', {method:'POST'}); alert('Baseline reset'); refresh(); } catch(e) { alert('Failed'); }
+    }
+}
+async function exportLogs() {
+    try { let r = await fetch(API+'/logs'); let d = await r.text();
+        let b = new Blob([d],{type:'text/plain'});
+        let a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'trust-sentinel-events.log'; a.click();
+    } catch(e) { alert('Failed'); }
+}
+setInterval(refresh, 3000);
+refresh();
+</script>
+</body>
+</html>
