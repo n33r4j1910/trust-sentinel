@@ -1,0 +1,4 @@
+@echo off 
+start "" "%~dp0trust-sentinel-daemon.exe" 
+timeout /t 5 >nul 
+start "" "%~dp0trust-sentinel-tray.exe" 

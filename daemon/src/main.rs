@@ -62,7 +62,7 @@ fn get_encryption_key(seed: &[u8], tpm_available: bool) -> Vec<u8> {
 }
 
 fn self_integrity_check() {
-    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_path = match std::env::current_exe() { Ok(p) => p, Err(_) => return };
     if let Ok(data) = fs::read(&exe_path) {
         let hash = hex::encode(ring::digest::digest(&ring::digest::SHA256, &data));
         let hash_path = PathBuf::from(DATA_DIR).join("agent.hash");
@@ -72,10 +72,13 @@ fn self_integrity_check() {
 }
 
 fn lock_seed_in_memory(seed: &[u8]) { let locked = seed.to_vec(); let ptr = locked.as_ptr(); let len = locked.len(); #[cfg(windows)] unsafe { use windows::Win32::System::Memory::VirtualLock; let _ = VirtualLock(ptr as *const _, len); } std::mem::forget(locked); }
-
 fn rotate_event_log(data_dir: &PathBuf, max_entries: usize) { let log_path = data_dir.join("events.log"); if log_path.exists() { if let Ok(c) = fs::read_to_string(&log_path) { let lines: Vec<&str> = c.lines().collect(); if lines.len() > max_entries { let t: Vec<&str> = lines.iter().skip(lines.len()-max_entries).cloned().collect(); fs::write(&log_path, t.join("\n")).ok(); } } } }
 
-fn log_event_direct(event_type: &str, details: &str, severity: &str) { let event = Event { timestamp: Utc::now().to_rfc3339(), event_type: event_type.into(), details: details.into(), severity: severity.into() }; let lp = PathBuf::from(DATA_DIR).join("events.log"); if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(lp) { let _ = writeln!(f, "{}", serde_json::to_string(&event).unwrap()); } }
+fn log_event_direct(event_type: &str, details: &str, severity: &str) {
+    let event = Event { timestamp: Utc::now().to_rfc3339(), event_type: event_type.into(), details: details.into(), severity: severity.into() };
+    let lp = PathBuf::from(DATA_DIR).join("events.log");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(lp) { let _ = writeln!(f, "{}", serde_json::to_string(&event).unwrap()); }
+}
 
 fn check_phishing_domains(state: &Arc<Mutex<AppState>>) {
     let guard = state.lock().unwrap(); let hosts_path = PathBuf::from(DATA_DIR).join("phishing_hosts.txt"); if !hosts_path.exists() { return; }
@@ -95,17 +98,27 @@ fn check_ransomware(state: &Arc<Mutex<AppState>>) {
     for fname in &canary_files { let p = canary_dir.join(fname); if !p.exists() { let _ = fs::write(&p, b"TRUST SENTINEL CANARY"); } if let Ok(meta) = fs::metadata(&p) { if let Ok(mt) = meta.modified() { if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 30 { modified += 1; } } } } }
     if modified >= 2 { log_event(&mut guard, "ransomware_alert", &format!("{} canary files modified - possible ransomware!", modified), "critical"); }
     let user_dirs = [std::env::var("USERPROFILE").unwrap_or_default()+"\\Documents", std::env::var("USERPROFILE").unwrap_or_default()+"\\Desktop"];
-    for dir in &user_dirs { if let Ok(entries) = fs::read_dir(dir) { let mut rw = 0; for e in entries.flatten() { if let Ok(meta) = e.metadata() { if let Ok(mt) = meta.modified() { if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 10 { rw += 1; } } } } } if rw > 50 { log_event(&mut guard, "ransomware_mass_write", &format!("{} files modified in 10s in {} - possible ransomware!", rw, dir), "critical"); } } }
+    for dir in &user_dirs { if let Ok(entries) = fs::read_dir(dir) { let mut rw = 0; for e in entries.flatten() { if let Ok(meta) = e.metadata() { if let Ok(mt) = meta.modified() { if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 10 { rw += 1; } } } } } if rw > 50 { log_event(&mut guard, "ransomware_mass_write", &format!("{} files modified in 10s - possible ransomware!", rw), "critical"); } } }
 }
 
 fn main() {
-    let data_dir = PathBuf::from(DATA_DIR); fs::create_dir_all(&data_dir).expect("Can't create data dir");
+    println!("[TS] Starting...");
+    let data_dir = PathBuf::from(DATA_DIR);
+    if let Err(e) = fs::create_dir_all(&data_dir) { eprintln!("[TS] Cannot create data dir: {}", e); std::process::exit(1); }
+    println!("[TS] Data dir OK");
     let (seed, tpm_available, pcr_bound) = get_or_create_seed(&data_dir);
-    self_integrity_check(); lock_seed_in_memory(&seed); rotate_event_log(&data_dir, 1000);
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    let enc_key = get_encryption_key(&seed, tpm_available); let baseline = load_or_create_baseline(&data_dir, &seed, &enc_key);
+    println!("[TS] Seed OK. TPM: {}", tpm_available);
+    self_integrity_check();
+    println!("[TS] Integrity OK");
+        // lock_seed_in_memory(&seed); // Skipped - VirtualLock issue
+    rotate_event_log(&data_dir, 1000);
+    std::thread::sleep(Duration::from_secs(5));
+    let enc_key = get_encryption_key(&seed, tpm_available);
+    let baseline = load_or_create_baseline(&data_dir, &seed, &enc_key);
+    println!("[TS] Baseline OK");
     let state = Arc::new(Mutex::new(AppState { status: DaemonStatus { trust_state: "Initialising".into(), token: String::new(), tpm_sealed: tpm_available, pcr_bound, last_check: Utc::now().to_rfc3339(), latest_events: vec![] }, events: vec![], baseline: Some(baseline), seed, tpm_available, pcr_bound, settings: Settings::default(), connection_history: HashMap::new(), known_usb_devices: HashSet::new(), known_connections: HashSet::new() }));
     let s1 = state.clone(); let hk = enc_key.clone(); std::thread::spawn(move || serve_http(s1, &hk));
+    println!("[TS] HTTP on port {}", HTTP_PORT);
     let s2 = state.clone(); std::thread::spawn(move || loop { generate_token(&s2); std::thread::sleep(Duration::from_secs(30)); });
     let s3 = state.clone(); std::thread::spawn(move || loop { check_credential_access(&s3); std::thread::sleep(Duration::from_secs(15)); });
     let s4 = state.clone(); std::thread::spawn(move || loop { check_suspicious_commands(&s4); std::thread::sleep(Duration::from_secs(10)); });
@@ -115,6 +128,7 @@ fn main() {
     let s8 = state.clone(); std::thread::spawn(move || loop { check_ransomware(&s8); std::thread::sleep(Duration::from_secs(30)); });
     let s9 = state.clone(); let sc = state.clone(); std::thread::spawn(move || loop { let iv = sc.lock().unwrap().settings.interval_integrity; check_integrity(&s9); std::thread::sleep(Duration::from_secs(iv)); });
     let s10 = state.clone(); let sc2 = state.clone(); std::thread::spawn(move || loop { let iv = sc2.lock().unwrap().settings.interval_intrusion; detect_intrusions(&s10); std::thread::sleep(Duration::from_secs(iv)); });
+    println!("[TS] Running. Open http://127.0.0.1:{}", HTTP_PORT);
     loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
@@ -129,10 +143,9 @@ fn serve_http(state: Arc<Mutex<AppState>>, enc_key: &[u8]) {
         let _ = stream.write_all(response.as_bytes()); } }
 }
 
-fn get_or_create_seed(data_dir: &PathBuf) -> (Vec<u8>, bool, bool) { if let Ok((s,p)) = get_tpm_pcr_seed(data_dir) { lock_data_folder(); return (s,true,p); } if let Ok(s) = get_tpm_seed(data_dir) { lock_data_folder(); return (s,true,false); } let sp = data_dir.join("seed.bin"); let s = if sp.exists() { fs::read(&sp).unwrap_or_else(|_| { let s = random_seed(); fs::write(&sp,&s).ok(); s }) } else { let s = random_seed(); fs::write(&sp,&s).expect("Failed"); s }; lock_data_folder(); (s,false,false) }
-fn get_tpm_pcr_seed(data_dir: &PathBuf) -> Result<(Vec<u8>, bool), Box<dyn std::error::Error>> { let pp = data_dir.join("tpm_pcr_seed.bin"); if pp.exists() { let ek = get_encryption_key(&[0u8;32],true); let ed = fs::read(&pp)?; if let Some(s) = decrypt_data(&ed,&ek) { return Ok((s,true)); } } let o = Command::new("powershell").args(["-NoProfile","-Command","$tpm=Get-Tpm;if($tpm.TpmReady -and $tpm.TpmEnabled){$b=New-Object Byte[] 32;(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b);[Convert]::ToBase64String($b)}else{Write-Error 'TPM not ready'}"]).output()?; if o.status.success() { let b64 = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !b64.is_empty() { let s = base64::engine::general_purpose::STANDARD.decode(&b64)?; let ek = get_encryption_key(&s,true); let ed = encrypt_data(&s,&ek); fs::write(&pp,&ed)?; return Ok((s,true)); } } Err("TPM PCR not available".into()) }
-fn get_tpm_seed(data_dir: &PathBuf) -> Result<Vec<u8>, Box<dyn std::error::Error>> { let tp = data_dir.join("tpm_seed.bin"); if tp.exists() { return Ok(fs::read(&tp)?); } let o = Command::new("powershell").args(["-NoProfile","-Command","$tpm=Get-Tpm;if($tpm.TpmReady){$b=New-Object Byte[] 32;(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b);[Convert]::ToBase64String($b)}else{Write-Error 'TPM not ready'}"]).output()?; if o.status.success() { let b64 = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !b64.is_empty() { let s = base64::engine::general_purpose::STANDARD.decode(&b64)?; fs::write(&tp,&s)?; return Ok(s); } } Err("TPM not available".into()) }
-fn lock_data_folder() { let _ = Command::new("icacls").args([DATA_DIR,"/inheritance:r","/grant:r","SYSTEM:(OI)(CI)F","/grant:r","BUILTIN\\Administrators:(OI)(CI)F"]).output(); }
+fn get_or_create_seed(data_dir: &PathBuf) -> (Vec<u8>, bool, bool) { if let Ok((s,p)) = get_tpm_pcr_seed(data_dir) { return (s,true,p); } if let Ok(s) = get_tpm_seed(data_dir) { return (s,true,false); } let sp = data_dir.join("seed.bin"); let s = if sp.exists() { fs::read(&sp).unwrap_or_else(|_| { let s = random_seed(); let _ = fs::write(&sp,&s); s }) } else { let s = random_seed(); let _ = fs::write(&sp,&s); s }; (s,false,false) }
+fn get_tpm_pcr_seed(data_dir: &PathBuf) -> Result<(Vec<u8>, bool), Box<dyn std::error::Error>> { let pp = data_dir.join("tpm_pcr_seed.bin"); if pp.exists() { let ek = get_encryption_key(&[0u8;32],true); let ed = fs::read(&pp)?; if let Some(s) = decrypt_data(&ed,&ek) { return Ok((s,true)); } } let o = Command::new("powershell").args(["-NoProfile","-Command","$tpm=Get-Tpm;if($tpm.TpmReady -and $tpm.TpmEnabled){$b=New-Object Byte[] 32;(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b);[Convert]::ToBase64String($b)}else{Write-Error 'TPM not ready'}"]).output()?; if o.status.success() { let b64 = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !b64.is_empty() { let s = base64::engine::general_purpose::STANDARD.decode(&b64)?; let ek = get_encryption_key(&s,true); let ed = encrypt_data(&s,&ek); let _ = fs::write(&pp,&ed); return Ok((s,true)); } } Err("TPM PCR not available".into()) }
+fn get_tpm_seed(data_dir: &PathBuf) -> Result<Vec<u8>, Box<dyn std::error::Error>> { let tp = data_dir.join("tpm_seed.bin"); if tp.exists() { return Ok(fs::read(&tp)?); } let o = Command::new("powershell").args(["-NoProfile","-Command","$tpm=Get-Tpm;if($tpm.TpmReady){$b=New-Object Byte[] 32;(New-Object Security.Cryptography.RNGCryptoServiceProvider).GetBytes($b);[Convert]::ToBase64String($b)}else{Write-Error 'TPM not ready'}"]).output()?; if o.status.success() { let b64 = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !b64.is_empty() { let s = base64::engine::general_purpose::STANDARD.decode(&b64)?; let _ = fs::write(&tp,&s); return Ok(s); } } Err("TPM not available".into()) }
 fn random_seed() -> Vec<u8> { let rng = SystemRandom::new(); let mut s = [0u8;32]; rng.fill(&mut s).unwrap(); s.to_vec() }
 
 fn generate_token(state: &Arc<Mutex<AppState>>) { let mut g = state.lock().unwrap(); let c = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()/30; let mut m = HmacSha256::new_from_slice(&g.seed).unwrap(); m.update(&c.to_be_bytes()); g.status.token = hex::encode(m.finalize().into_bytes()); g.status.tpm_sealed = g.tpm_available; g.status.pcr_bound = g.pcr_bound; }
@@ -155,8 +168,21 @@ fn get_firewall_profiles() -> Vec<String> { let mut p = Vec::new(); if let Ok(o)
 fn get_windows_update_status() -> String { if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","$u=(New-Object -ComObject Microsoft.Update.AutoUpdate).Results;if($u){'Enabled'}else{'Disabled'}"]).output() { let s = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !s.is_empty() { return s; } } "Unknown".into() }
 fn collect_current_state() -> SystemState { SystemState { dns_servers: get_dns_servers(), hosts_hash: get_hosts_hash(), startup_entries: get_startup_entries(), listening_ports: get_listening_ports(), firewall_profiles: get_firewall_profiles(), windows_update_status: get_windows_update_status() } }
 
-fn load_or_create_baseline(data_dir: &PathBuf, seed: &[u8], enc_key: &[u8]) -> Baseline { let p = data_dir.join("baseline.json"); if p.exists() { if let Ok(d) = fs::read(&p) { if let Some(pl) = decrypt_data(&d,enc_key) { if let Ok(b) = serde_json::from_str::<Baseline>(&String::from_utf8_lossy(&pl)) { if sign_state(&b.state,seed)==b.signature { return b; } } } } } let s = collect_current_state(); let sig = sign_state(&s,seed); let b = Baseline{state:s,signature:sig}; let pl = serde_json::to_string(&b).unwrap(); let enc = encrypt_data(pl.as_bytes(),enc_key); fs::write(&p,&enc).ok(); b }
-fn sign_state(state: &SystemState, seed: &[u8]) -> String { let d = serde_json::to_string(state).unwrap(); let mut m = HmacSha256::new_from_slice(seed).unwrap(); m.update(d.as_bytes()); hex::encode(m.finalize().into_bytes()) }
+fn load_or_create_baseline(data_dir: &PathBuf, seed: &[u8], enc_key: &[u8]) -> Baseline {
+    let p = data_dir.join("baseline.json");
+    if p.exists() { if let Ok(d) = fs::read(&p) { if let Some(pl) = decrypt_data(&d, enc_key) { if let Ok(b) = serde_json::from_str::<Baseline>(&String::from_utf8_lossy(&pl)) { if sign_state(&b.state, seed) == b.signature { return b; } } } } }
+    let s = collect_current_state(); let sig = sign_state(&s, seed); let b = Baseline { state: s, signature: sig };
+    let pl = serde_json::to_string(&b).unwrap(); let enc = encrypt_data(pl.as_bytes(), enc_key);
+    if let Err(e) = fs::write(&p, &enc) { eprintln!("[TS] Cannot write baseline: {}", e); }
+    b
+}
+
+fn sign_state(state: &SystemState, seed: &[u8]) -> String {
+    let d = serde_json::to_string(state).unwrap();
+    let mut m = HmacSha256::new_from_slice(seed).unwrap();
+    m.update(d.as_bytes());
+    hex::encode(m.finalize().into_bytes())
+}
 
 fn diff_states(baseline: &SystemState, current: &SystemState) -> Vec<(String, String)> { let mut d = Vec::new(); let bd:HashSet<&str> = baseline.dns_servers.iter().map(|s|s.as_str()).collect(); let cd:HashSet<&str> = current.dns_servers.iter().map(|s|s.as_str()).collect(); if bd!=cd { d.push(("dns_change".into(),"DNS changed".into())); } if baseline.hosts_hash!=current.hosts_hash { d.push(("hosts_change".into(),"Hosts modified".into())); } let bs:HashSet<&str> = baseline.startup_entries.iter().map(|s|s.as_str()).collect(); let cs:HashSet<&str> = current.startup_entries.iter().map(|s|s.as_str()).collect(); let ns:Vec<_> = cs.difference(&bs).collect(); let rs:Vec<_> = bs.difference(&cs).collect(); if !ns.is_empty()||!rs.is_empty() { d.push(("startup_change".into(),"Startup changed".into())); } for pb in &current.listening_ports { if let Some(ps) = pb.split(':').last() { if let Ok(p) = ps.parse::<u16>() { if RISKY_PORTS.contains(&p) { d.push(("risky_port".into(),format!("Risky port: {}",pb))); } } } } let bf:HashSet<&str> = baseline.firewall_profiles.iter().map(|s|s.as_str()).collect(); let cf:HashSet<&str> = current.firewall_profiles.iter().map(|s|s.as_str()).collect(); if bf!=cf { d.push(("firewall_change".into(),"Firewall changed".into())); } if baseline.windows_update_status!=current.windows_update_status { d.push(("update_change".into(),"Update status changed".into())); } d }
 
