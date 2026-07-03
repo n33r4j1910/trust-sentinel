@@ -47,7 +47,32 @@ fn main() {
         println!("Trust Sentinel on http://127.0.0.1:{}", HTTP_PORT);
         for stream in listener.incoming() {
             if let Ok(mut s) = stream {
-                let _ = s.read(&mut [0u8; 1024]);
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+
+                if req.contains("POST /reset") {
+                    let cur = collect_state();
+                    let mut bl = b1.lock().unwrap();
+                    *bl = cur;
+                    let mut ev = e1.lock().unwrap();
+                    ev.clear();
+                    let st = DaemonStatus {
+                        trust_state: "Trusted".into(),
+                        token: token_str(&s1),
+                        last_check: Utc::now().to_rfc3339(),
+                        latest_events: vec![],
+                    };
+                    let json = serde_json::to_string(&st).unwrap();
+                    let r = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                        json.len(),
+                        json
+                    );
+                    let _ = s.write_all(r.as_bytes());
+                    continue;
+                }
+
                 let cur = collect_state();
                 let bl = b1.lock().unwrap();
                 let ev = e1.lock().unwrap();
@@ -77,7 +102,7 @@ fn main() {
         }
     });
 
-    // Check for changes every 5 min
+    // Integrity checker every 5 minutes
     let b2 = baseline.clone();
     let e2 = events.clone();
     std::thread::spawn(move || loop {
@@ -164,7 +189,6 @@ fn get_startup() -> Vec<String> {
             e.push(f.file_name().to_string_lossy().to_string());
         }
     }
-    // Check registry Run keys
     if let Ok(o) = Command::new("powershell")
         .args(["-NoProfile", "-Command", "(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run').PSObject.Properties | Where-Object {$_.Name -ne 'PSPath'} | Select-Object -ExpandProperty Name"])
         .output()
@@ -221,34 +245,18 @@ fn get_firewall() -> Vec<String> {
 
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
-    
     let ad: HashSet<&str> = a.dns_servers.iter().map(|s| s.as_str()).collect();
     let bd: HashSet<&str> = b.dns_servers.iter().map(|s| s.as_str()).collect();
-    if ad != bd {
-        d.push(("dns_change".into(), "DNS servers changed".into()));
-    }
-    
-    if a.hosts_hash != b.hosts_hash {
-        d.push(("hosts_change".into(), "Hosts file modified".into()));
-    }
-    
+    if ad != bd { d.push(("dns_change".into(), "DNS changed".into())); }
+    if a.hosts_hash != b.hosts_hash { d.push(("hosts_change".into(), "Hosts modified".into())); }
     let ae: HashSet<&str> = a.startup_entries.iter().map(|s| s.as_str()).collect();
     let be: HashSet<&str> = b.startup_entries.iter().map(|s| s.as_str()).collect();
-    if ae != be {
-        d.push(("startup_change".into(), "Startup entries changed".into()));
-    }
-    
+    if ae != be { d.push(("startup_change".into(), "Startup changed".into())); }
     let ap: HashSet<&str> = a.listening_ports.iter().map(|s| s.as_str()).collect();
     let bp: HashSet<&str> = b.listening_ports.iter().map(|s| s.as_str()).collect();
-    if ap != bp {
-        d.push(("port_change".into(), "Listening ports changed".into()));
-    }
-    
+    if ap != bp { d.push(("port_change".into(), "Ports changed".into())); }
     let af: HashSet<&str> = a.firewall_profiles.iter().map(|s| s.as_str()).collect();
     let bf: HashSet<&str> = b.firewall_profiles.iter().map(|s| s.as_str()).collect();
-    if af != bf {
-        d.push(("firewall_change".into(), "Firewall profiles changed".into()));
-    }
-    
+    if af != bf { d.push(("firewall_change".into(), "Firewall changed".into())); }
     d
 }
