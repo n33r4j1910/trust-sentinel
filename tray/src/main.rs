@@ -20,15 +20,9 @@ fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
             let dx = x as f32 + 0.5 - center;
             let dy = y as f32 + 0.5 - center;
             if (dx * dx + dy * dy).sqrt() <= radius {
-                rgba.push(r);
-                rgba.push(g);
-                rgba.push(b);
-                rgba.push(255);
+                rgba.push(r); rgba.push(g); rgba.push(b); rgba.push(255);
             } else {
-                rgba.push(0);
-                rgba.push(0);
-                rgba.push(0);
-                rgba.push(0);
+                rgba.push(0); rgba.push(0); rgba.push(0); rgba.push(0);
             }
         }
     }
@@ -50,16 +44,28 @@ fn main() {
         .unwrap();
 
     loop {
-        if let Ok(resp) = client.get("http://127.0.0.1:12788").send() {
+        if let Ok(resp) = client.get("http://127.0.0.1:12789").send() {
             if let Ok(status) = resp.json::<DaemonStatus>() {
-                let (icon, tooltip): (tray_icon::Icon, String) = match status.trust_state.as_str() {
-                    "Trusted" => (icon_green.clone(), "Trust Sentinel - Trusted".to_string()),
-                    "Warning" => (icon_yellow.clone(), "Trust Sentinel - Warning".to_string()),
-                    "Compromised" => (icon_red.clone(), "Trust Sentinel - Compromised".to_string()),
-                    _ => (icon_gray.clone(), format!("Trust Sentinel - {}", status.trust_state)),
+                let (icon, tooltip) = match status.trust_state.as_str() {
+                    "Trusted" => (
+                        icon_green.clone(),
+                        "🟢 Trust Sentinel - Device is safe\nAll checks passed. No unauthorized changes detected."
+                    ),
+                    "Warning" => (
+                        icon_yellow.clone(),
+                        "🟡 Trust Sentinel - Warning\nA change was detected.\n\nWhat to do:\n• Open http://127.0.0.1:12789 to check details\n• If the change was you, click Reset Baseline"
+                    ),
+                    "Compromised" => (
+                        icon_red.clone(),
+                        "🔴 Trust Sentinel - Compromised\nMultiple unauthorized changes detected.\n\nWhat to do:\n• Disconnect from network immediately\n• Open http://127.0.0.1:12789 to review events\n• Run antivirus scan\n• Restore from backup if needed"
+                    ),
+                    _ => (
+                        icon_gray.clone(),
+                        "Trust Sentinel - Checking..."
+                    ),
                 };
                 tray.set_icon(Some(icon)).ok();
-                tray.set_tooltip(Some(tooltip.as_str())).ok();
+                tray.set_tooltip(Some(tooltip)).ok();
             }
         }
         thread::sleep(Duration::from_secs(2));
