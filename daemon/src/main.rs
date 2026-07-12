@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
@@ -16,6 +16,9 @@ type HmacSha256 = Hmac<Sha256>;
 
 const HTTP_PORT: u16 = 12789;
 const SCAN_THRESHOLD: usize = 15;
+const DATA_DIR: &str = "C:\\ProgramData\\Trust Sentinel";
+
+static PHISHING_BLOCKLIST: OnceLock<HashSet<String>> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct SystemState {
@@ -37,7 +40,7 @@ struct DaemonStatus {
 }
 
 fn main() {
-    let _ = fs::create_dir_all("C:\\ProgramData\\Trust Sentinel");
+    let _ = fs::create_dir_all(DATA_DIR);
     let seed = random_seed();
     let baseline = Arc::new(Mutex::new(collect_state()));
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -60,12 +63,7 @@ fn main() {
                     *bl = cur;
                     let mut ev = e1.lock().unwrap();
                     ev.clear();
-                    let st = DaemonStatus {
-                        trust_state: "Trusted".into(),
-                        token: token_str(&s1),
-                        last_check: Utc::now().to_rfc3339(),
-                        latest_events: vec![],
-                    };
+                    let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec![] };
                     let json = serde_json::to_string(&st).unwrap();
                     let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
                     let _ = s.write_all(r.as_bytes());
@@ -77,24 +75,21 @@ fn main() {
                 let ev = e1.lock().unwrap();
                 let diffs = diff(&bl, &cur);
                 let intruder = detect_port_scan();
-                let state = if !intruder.is_empty() {
-                    let mut ev = e1.lock().unwrap();
-                    ev.push(format!("port_scan: {} appears to be port scanning you", intruder));
-                    "Compromised"
-                } else if diffs.is_empty() {
-                    "Trusted"
-                } else if diffs.len() == 1 {
-                    "Warning"
-                } else {
-                    "Compromised"
-                };
+                let phishing = check_phishing();
+                let ransomware = check_ransomware();
+                let usb_threat = check_usb();
+                let mut state = if diffs.is_empty() { "Trusted" } else if diffs.len() == 1 { "Warning" } else { "Compromised" };
+                
+                let mut extra_events: Vec<String> = Vec::new();
+                if !intruder.is_empty() { state = "Compromised"; extra_events.push(format!("port_scan: {} scanning you", intruder)); }
+                if !phishing.is_empty() { if state == "Trusted" { state = "Warning"; } extra_events.push(format!("phishing: {} in DNS cache", phishing)); }
+                if ransomware { state = "Compromised"; extra_events.push("ransomware: Canary files modified!".into()); }
+                if !usb_threat.is_empty() { extra_events.push(format!("usb: {} inserted", usb_threat)); }
+
                 let token = token_str(&s1);
-                let st = DaemonStatus {
-                    trust_state: state.into(),
-                    token,
-                    last_check: Utc::now().to_rfc3339(),
-                    latest_events: ev.iter().rev().take(5).cloned().collect(),
-                };
+                let mut all_events: Vec<String> = ev.iter().rev().take(5).cloned().collect();
+                all_events.extend(extra_events);
+                let st = DaemonStatus { trust_state: state.into(), token, last_check: Utc::now().to_rfc3339(), latest_events: all_events };
                 let json = serde_json::to_string(&st).unwrap();
                 let r = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
                 let _ = s.write_all(r.as_bytes());
@@ -102,23 +97,39 @@ fn main() {
         }
     });
 
-    // Integrity checker every 5 minutes
-    let b2 = baseline.clone();
-    let e2 = events.clone();
+    // Integrity checker
+    let b2 = baseline.clone(); let e2 = events.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(300));
         let cur = collect_state();
         let bl = b2.lock().unwrap();
         let diffs = diff(&bl, &cur);
-        if !diffs.is_empty() {
-            let mut ev = e2.lock().unwrap();
-            for d in &diffs { ev.push(format!("{}: {}", d.0, d.1)); }
-        }
+        if !diffs.is_empty() { let mut ev = e2.lock().unwrap(); for d in &diffs { ev.push(format!("{}: {}", d.0, d.1)); } }
         let intruder = detect_port_scan();
-        if !intruder.is_empty() {
-            let mut ev = e2.lock().unwrap();
-            ev.push(format!("port_scan: {} scanning your ports", intruder));
-        }
+        if !intruder.is_empty() { let mut ev = e2.lock().unwrap(); ev.push(format!("port_scan: {}", intruder)); }
+    });
+
+    // Phishing check every 2 min
+    let e3 = events.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(120));
+        let domain = check_phishing();
+        if !domain.is_empty() { let mut ev = e3.lock().unwrap(); ev.push(format!("phishing: {} in DNS cache", domain)); }
+    });
+
+    // Ransomware check every 30 sec
+    let e4 = events.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(30));
+        if check_ransomware() { let mut ev = e4.lock().unwrap(); ev.push("ransomware: Canary files modified!".into()); }
+    });
+
+    // USB check every 30 sec
+    let e5 = events.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let usb = check_usb();
+        if !usb.is_empty() { let mut ev = e5.lock().unwrap(); ev.push(format!("usb: {}", usb)); }
     });
 
     loop { std::thread::sleep(Duration::from_secs(60)); }
@@ -133,15 +144,7 @@ fn token_str(seed: &[u8]) -> String {
 }
 
 fn collect_state() -> SystemState {
-    SystemState {
-        dns_servers: get_dns(),
-        hosts_hash: get_hosts_hash(),
-        startup_entries: get_startup(),
-        listening_ports: get_ports(),
-        firewall_profiles: get_firewall(),
-        arp_table: get_arp(),
-        wifi_ssid: get_wifi(),
-    }
+    SystemState { dns_servers: get_dns(), hosts_hash: get_hosts_hash(), startup_entries: get_startup(), listening_ports: get_ports(), firewall_profiles: get_firewall(), arp_table: get_arp(), wifi_ssid: get_wifi() }
 }
 
 fn get_dns() -> Vec<String> {
@@ -223,6 +226,54 @@ fn detect_port_scan() -> String {
     String::new()
 }
 
+fn check_phishing() -> String {
+    let hosts_path = std::path::PathBuf::from(DATA_DIR).join("phishing_hosts.txt");
+    let blocklist = PHISHING_BLOCKLIST.get_or_init(|| {
+        let mut set = HashSet::new();
+        if let Ok(c) = fs::read_to_string(&hosts_path) {
+            for l in c.lines() {
+                let l = l.trim();
+                if l.starts_with("0.0.0.0") || l.starts_with("127.0.0.1") {
+                    if let Some(d) = l.split_whitespace().nth(1) { set.insert(d.to_lowercase()); }
+                }
+            }
+        }
+        set
+    });
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-DnsClientCache | Select-Object -ExpandProperty Entry | Where-Object { $_ -match '^[a-zA-Z]' }"]).output() {
+        for e in String::from_utf8_lossy(&o.stdout).lines() {
+            let e = e.trim().to_lowercase();
+            if !e.is_empty() && blocklist.contains(&e) { return e; }
+        }
+    }
+    String::new()
+}
+
+fn check_ransomware() -> bool {
+    let canary_dir = std::path::PathBuf::from(DATA_DIR).join("canary");
+    let _ = fs::create_dir_all(&canary_dir);
+    let canary_files = ["test.docx", "test.pdf", "test.jpg", "test.txt", "test.xlsx"];
+    let mut modified = 0;
+    for fname in &canary_files {
+        let p = canary_dir.join(fname);
+        if !p.exists() { let _ = fs::write(&p, b"TRUST SENTINEL CANARY"); }
+        if let Ok(meta) = fs::metadata(&p) {
+            if let Ok(mt) = meta.modified() {
+                if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 30 { modified += 1; } }
+            }
+        }
+    }
+    modified >= 2
+}
+
+fn check_usb() -> String {
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'OK' -and $_.FriendlyName -match 'storage|flash|drive'} | Select-Object -ExpandProperty FriendlyName"]).output() {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if !s.is_empty() { return s; }
+    }
+    String::new()
+}
+
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
     let ad: HashSet<&str> = a.dns_servers.iter().map(|s| s.as_str()).collect();
@@ -240,7 +291,7 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     if af != bf { d.push(("firewall_change".into(), "Firewall changed".into())); }
     let aa: HashSet<&str> = a.arp_table.iter().map(|s| s.as_str()).collect();
     let ba: HashSet<&str> = b.arp_table.iter().map(|s| s.as_str()).collect();
-    if aa != ba { d.push(("arp_change".into(), "ARP table changed - possible MITM attack!".into())); }
-    if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi changed to: {} - verify this is your network!", b.wifi_ssid))); }
+    if aa != ba { d.push(("arp_change".into(), "ARP changed - MITM attack!".into())); }
+    if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi changed to: {}", b.wifi_ssid))); }
     d
 }
