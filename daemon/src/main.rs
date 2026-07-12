@@ -15,6 +15,7 @@ use sha2::Sha256;
 type HmacSha256 = Hmac<Sha256>;
 
 const HTTP_PORT: u16 = 12789;
+const SCAN_THRESHOLD: usize = 15;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct SystemState {
@@ -23,6 +24,8 @@ struct SystemState {
     startup_entries: Vec<String>,
     listening_ports: Vec<String>,
     firewall_profiles: Vec<String>,
+    arp_table: Vec<String>,
+    wifi_ssid: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -64,11 +67,7 @@ fn main() {
                         latest_events: vec![],
                     };
                     let json = serde_json::to_string(&st).unwrap();
-                    let r = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                        json.len(),
-                        json
-                    );
+                    let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
                     let _ = s.write_all(r.as_bytes());
                     continue;
                 }
@@ -77,7 +76,12 @@ fn main() {
                 let bl = b1.lock().unwrap();
                 let ev = e1.lock().unwrap();
                 let diffs = diff(&bl, &cur);
-                let state = if diffs.is_empty() {
+                let intruder = detect_port_scan();
+                let state = if !intruder.is_empty() {
+                    let mut ev = e1.lock().unwrap();
+                    ev.push(format!("port_scan: {} appears to be port scanning you", intruder));
+                    "Compromised"
+                } else if diffs.is_empty() {
                     "Trusted"
                 } else if diffs.len() == 1 {
                     "Warning"
@@ -92,11 +96,7 @@ fn main() {
                     latest_events: ev.iter().rev().take(5).cloned().collect(),
                 };
                 let json = serde_json::to_string(&st).unwrap();
-                let r = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
-                    json.len(),
-                    json
-                );
+                let r = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
                 let _ = s.write_all(r.as_bytes());
             }
         }
@@ -112,32 +112,23 @@ fn main() {
         let diffs = diff(&bl, &cur);
         if !diffs.is_empty() {
             let mut ev = e2.lock().unwrap();
-            for d in &diffs {
-                ev.push(format!("{}: {}", d.0, d.1));
-            }
+            for d in &diffs { ev.push(format!("{}: {}", d.0, d.1)); }
+        }
+        let intruder = detect_port_scan();
+        if !intruder.is_empty() {
+            let mut ev = e2.lock().unwrap();
+            ev.push(format!("port_scan: {} scanning your ports", intruder));
         }
     });
 
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
-    }
+    loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
-fn random_seed() -> Vec<u8> {
-    let r = SystemRandom::new();
-    let mut s = [0u8; 32];
-    r.fill(&mut s).unwrap();
-    s.to_vec()
-}
+fn random_seed() -> Vec<u8> { let r = SystemRandom::new(); let mut s = [0u8; 32]; r.fill(&mut s).unwrap(); s.to_vec() }
 
 fn token_str(seed: &[u8]) -> String {
-    let c = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        / 30;
-    let mut m = HmacSha256::new_from_slice(seed).unwrap();
-    m.update(&c.to_be_bytes());
+    let c = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() / 30;
+    let mut m = HmacSha256::new_from_slice(seed).unwrap(); m.update(&c.to_be_bytes());
     hex::encode(m.finalize().into_bytes())
 }
 
@@ -148,106 +139,95 @@ fn collect_state() -> SystemState {
         startup_entries: get_startup(),
         listening_ports: get_ports(),
         firewall_profiles: get_firewall(),
+        arp_table: get_arp(),
+        wifi_ssid: get_wifi(),
     }
 }
 
 fn get_dns() -> Vec<String> {
     let mut d = Vec::new();
-    if let Ok(o) = Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object {$_.ServerAddresses.Count -gt 0} | ForEach-Object {$_.ServerAddresses -join ','}"])
-        .output()
-    {
-        for l in String::from_utf8_lossy(&o.stdout).lines() {
-            for a in l.split(',') {
-                let a = a.trim().to_string();
-                if !a.is_empty() && !d.contains(&a) {
-                    d.push(a);
-                }
-            }
-        }
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object {$_.ServerAddresses.Count -gt 0} | ForEach-Object {$_.ServerAddresses -join ','}"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { for a in l.split(',') { let a = a.trim().to_string(); if !a.is_empty() && !d.contains(&a) { d.push(a); } } }
     }
-    if d.is_empty() {
-        d.push("Unknown".into());
-    }
+    if d.is_empty() { d.push("Unknown".into()); }
     d
 }
 
 fn get_hosts_hash() -> String {
-    if let Ok(c) = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts") {
-        hex::encode(ring::digest::digest(&ring::digest::SHA256, c.as_bytes()))
-    } else {
-        "unreadable".into()
-    }
+    if let Ok(c) = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts") { hex::encode(ring::digest::digest(&ring::digest::SHA256, c.as_bytes())) } else { "unreadable".into() }
 }
 
 fn get_startup() -> Vec<String> {
     let mut e = Vec::new();
-    let sf = std::env::var("APPDATA").unwrap_or_default()
-        + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup";
-    if let Ok(d) = fs::read_dir(&sf) {
-        for f in d.flatten() {
-            e.push(f.file_name().to_string_lossy().to_string());
-        }
+    let sf = std::env::var("APPDATA").unwrap_or_default() + "\\Microsoft\\Windows\\Start Menu\\Programs\\Startup";
+    if let Ok(d) = fs::read_dir(&sf) { for f in d.flatten() { e.push(f.file_name().to_string_lossy().to_string()); } }
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run').PSObject.Properties | Where-Object {$_.Name -ne 'PSPath'} | Select-Object -ExpandProperty Name"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { e.push(l); } }
     }
-    if let Ok(o) = Command::new("powershell")
-        .args(["-NoProfile", "-Command", "(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run').PSObject.Properties | Where-Object {$_.Name -ne 'PSPath'} | Select-Object -ExpandProperty Name"])
-        .output()
-    {
-        for l in String::from_utf8_lossy(&o.stdout).lines() {
-            let l = l.trim().to_string();
-            if !l.is_empty() {
-                e.push(l);
-            }
-        }
-    }
-    if e.is_empty() {
-        e.push("None".into());
-    }
+    if e.is_empty() { e.push("None".into()); }
     e
 }
 
 fn get_ports() -> Vec<String> {
     let mut p = Vec::new();
-    if let Ok(o) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() {
+    if let Ok(o) = Command::new("netstat").args(["-ano","-p","TCP"]).output() {
         for l in String::from_utf8_lossy(&o.stdout).lines().skip(4) {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            if parts.len() >= 4 && parts[3] == "LISTENING" {
-                let a = parts[1].to_string();
-                if a != "0.0.0.0:0" && !a.ends_with(&format!(":{}", HTTP_PORT)) {
-                    p.push(a);
-                }
-            }
+            if parts.len() >= 4 && parts[3] == "LISTENING" { let a = parts[1].to_string(); if a != "0.0.0.0:0" && !a.ends_with(&format!(":{}", HTTP_PORT)) { p.push(a); } }
         }
     }
-    p.sort();
-    p.dedup();
-    p
+    p.sort(); p.dedup(); p
 }
 
 fn get_firewall() -> Vec<String> {
     let mut p = Vec::new();
-    if let Ok(o) = Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Get-NetFirewallProfile | ForEach-Object {$_.Name+':'+($_.Enabled ? 'ON':'OFF')}"])
-        .output()
-    {
-        for l in String::from_utf8_lossy(&o.stdout).lines() {
-            let l = l.trim().to_string();
-            if !l.is_empty() {
-                p.push(l);
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-NetFirewallProfile | ForEach-Object {$_.Name+':'+($_.Enabled ? 'ON':'OFF')}"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { p.push(l); } }
+    }
+    if p.is_empty() { p.push("Unknown".into()); }
+    p
+}
+
+fn get_arp() -> Vec<String> {
+    let mut a = Vec::new();
+    if let Ok(o) = Command::new("arp").args(["-a"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if l.contains("dynamic") || l.contains("static") { a.push(l); } }
+    }
+    if a.is_empty() { a.push("None".into()); }
+    a
+}
+
+fn get_wifi() -> String {
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","(Get-NetConnectionProfile | Where-Object {$_.InterfaceAlias -like '*Wi*' -or $_.InterfaceAlias -like '*Wireless*'} | Select-Object -First 1).Name"]).output() {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if !s.is_empty() { return s; }
+    }
+    "Unknown".into()
+}
+
+fn detect_port_scan() -> String {
+    let mut ip_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Ok(o) = Command::new("netstat").args(["-ano","-p","TCP"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines().skip(4) {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            if parts.len() >= 3 && parts[3] == "ESTABLISHED" {
+                if let Some(ip) = parts[2].rsplitn(2, ':').nth(1) {
+                    if !ip.starts_with("127.") && !ip.starts_with("192.168.") && !ip.starts_with("10.") {
+                        *ip_counts.entry(ip.to_string()).or_insert(0) += 1;
+                    }
+                }
             }
         }
     }
-    if p.is_empty() {
-        p.push("Unknown".into());
-    }
-    p
+    for (ip, count) in &ip_counts { if *count > SCAN_THRESHOLD { return ip.clone(); } }
+    String::new()
 }
 
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
     let ad: HashSet<&str> = a.dns_servers.iter().map(|s| s.as_str()).collect();
     let bd: HashSet<&str> = b.dns_servers.iter().map(|s| s.as_str()).collect();
-    if ad != bd { d.push(("dns_change".into(), "DNS changed".into())); }
+    if ad != bd { d.push(("dns_change".into(), "DNS changed - possible hijacking!".into())); }
     if a.hosts_hash != b.hosts_hash { d.push(("hosts_change".into(), "Hosts modified".into())); }
     let ae: HashSet<&str> = a.startup_entries.iter().map(|s| s.as_str()).collect();
     let be: HashSet<&str> = b.startup_entries.iter().map(|s| s.as_str()).collect();
@@ -258,5 +238,9 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let af: HashSet<&str> = a.firewall_profiles.iter().map(|s| s.as_str()).collect();
     let bf: HashSet<&str> = b.firewall_profiles.iter().map(|s| s.as_str()).collect();
     if af != bf { d.push(("firewall_change".into(), "Firewall changed".into())); }
+    let aa: HashSet<&str> = a.arp_table.iter().map(|s| s.as_str()).collect();
+    let ba: HashSet<&str> = b.arp_table.iter().map(|s| s.as_str()).collect();
+    if aa != ba { d.push(("arp_change".into(), "ARP table changed - possible MITM attack!".into())); }
+    if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi changed to: {} - verify this is your network!", b.wifi_ssid))); }
     d
 }
