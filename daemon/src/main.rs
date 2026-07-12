@@ -17,6 +17,7 @@ type HmacSha256 = Hmac<Sha256>;
 const HTTP_PORT: u16 = 12789;
 const SCAN_THRESHOLD: usize = 15;
 const DATA_DIR: &str = "C:\\ProgramData\\Trust Sentinel";
+const HOSTS_BACKUP: &str = "C:\\ProgramData\\Trust Sentinel\\hosts.backup";
 
 static PHISHING_BLOCKLIST: OnceLock<HashSet<String>> = OnceLock::new();
 
@@ -41,116 +42,123 @@ struct DaemonStatus {
 
 fn main() {
     let _ = fs::create_dir_all(DATA_DIR);
+    backup_hosts();
     let seed = random_seed();
     let baseline = Arc::new(Mutex::new(collect_state()));
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let b1 = baseline.clone();
-    let e1 = events.clone();
-    let s1 = seed.clone();
+    let b1 = baseline.clone(); let e1 = events.clone(); let s1 = seed.clone();
     std::thread::spawn(move || {
         let listener = TcpListener::bind(("127.0.0.1", HTTP_PORT)).unwrap();
         println!("Trust Sentinel on http://127.0.0.1:{}", HTTP_PORT);
         for stream in listener.incoming() {
             if let Ok(mut s) = stream {
-                let mut buf = [0u8; 2048];
+                let mut buf = [0u8; 4096];
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
 
                 if req.contains("POST /reset") {
-                    let cur = collect_state();
-                    let mut bl = b1.lock().unwrap();
-                    *bl = cur;
-                    let mut ev = e1.lock().unwrap();
-                    ev.clear();
+                    let cur = collect_state(); *b1.lock().unwrap() = cur; e1.lock().unwrap().clear();
                     let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec![] };
                     let json = serde_json::to_string(&st).unwrap();
-                    let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
-                    let _ = s.write_all(r.as_bytes());
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
                     continue;
                 }
-
-                if req.contains("POST /stealth") {
-                    let _ = Command::new("powershell").args(["-NoProfile","-Command",
-                        "Set-NetFirewallProfile -All -DefaultInboundAction Block;",
-                        "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Disable-NetFirewallRule;",
-                        "Get-NetFirewallRule -DisplayGroup 'File and Printer Sharing' | Disable-NetFirewallRule;",
-                        "Get-Service -Name 'FDResPub','SSDPSRV','upnphost' | Stop-Service -Force;",
-                        "Set-Service -Name 'FDResPub','SSDPSRV','upnphost' -StartupType Disabled;"
-                    ]).output();
-                    let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth mode ON - device hidden".into()] };
-                    let json = serde_json::to_string(&st).unwrap();
-                    let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
-                    let _ = s.write_all(r.as_bytes());
-                    continue;
-                }
-
-                if req.contains("POST /visible") {
-                    let _ = Command::new("powershell").args(["-NoProfile","-Command",
-                        "Set-NetFirewallProfile -All -DefaultInboundAction Allow;",
-                        "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Enable-NetFirewallRule;",
-                        "Set-Service -Name 'FDResPub','SSDPSRV','upnphost' -StartupType Manual;"
-                    ]).output();
-                    let st = DaemonStatus { trust_state: "Visible".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth mode OFF - device visible".into()] };
-                    let json = serde_json::to_string(&st).unwrap();
-                    let r = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
-                    let _ = s.write_all(r.as_bytes());
-                    continue;
-                }
+                if req.contains("POST /stealth") { stealth_on(); let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth ON".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
+                if req.contains("POST /visible") { stealth_off(); let st = DaemonStatus { trust_state: "Visible".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth OFF".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
+                if req.contains("POST /repair") { let fixed = auto_repair(); let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: fixed }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
 
                 let cur = collect_state();
-                let bl = b1.lock().unwrap();
-                let ev = e1.lock().unwrap();
+                let bl = b1.lock().unwrap(); let ev = e1.lock().unwrap();
                 let diffs = diff(&bl, &cur);
                 let intruder = detect_port_scan();
                 let phishing = check_phishing();
                 let ransomware = check_ransomware();
                 let usb_threat = check_usb();
                 let mut state = if diffs.is_empty() { "Trusted" } else if diffs.len() == 1 { "Warning" } else { "Compromised" };
-
-                let mut extra_events: Vec<String> = Vec::new();
-                if !intruder.is_empty() { state = "Compromised"; extra_events.push(format!("port_scan: {} scanning you", intruder)); }
-                if !phishing.is_empty() { if state == "Trusted" { state = "Warning"; } extra_events.push(format!("phishing: {} in DNS cache", phishing)); }
-                if ransomware { state = "Compromised"; extra_events.push("ransomware: Canary files modified!".into()); }
-                if !usb_threat.is_empty() { extra_events.push(format!("usb: {} inserted", usb_threat)); }
-
+                let mut extra: Vec<String> = Vec::new();
+                if !intruder.is_empty() { state = "Compromised"; extra.push(format!("port_scan: {}", intruder)); }
+                if !phishing.is_empty() { if state == "Trusted" { state = "Warning"; } extra.push(format!("phishing: {}", phishing)); }
+                if ransomware { state = "Compromised"; extra.push("ransomware: Canary files modified!".into()); }
+                if !usb_threat.is_empty() { extra.push(format!("usb: {}", usb_threat)); }
                 let token = token_str(&s1);
-                let mut all_events: Vec<String> = ev.iter().rev().take(5).cloned().collect();
-                all_events.extend(extra_events);
-                let st = DaemonStatus { trust_state: state.into(), token, last_check: Utc::now().to_rfc3339(), latest_events: all_events };
+                let mut all: Vec<String> = ev.iter().rev().take(5).cloned().collect();
+                all.extend(extra);
+                let st = DaemonStatus { trust_state: state.into(), token, last_check: Utc::now().to_rfc3339(), latest_events: all };
                 let json = serde_json::to_string(&st).unwrap();
-                let r = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json);
-                let _ = s.write_all(r.as_bytes());
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
             }
         }
     });
 
+    // Integrity checker with auto-repair
     let b2 = baseline.clone(); let e2 = events.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(300));
         let cur = collect_state();
         let bl = b2.lock().unwrap();
         let diffs = diff(&bl, &cur);
-        if !diffs.is_empty() { let mut ev = e2.lock().unwrap(); for d in &diffs { ev.push(format!("{}: {}", d.0, d.1)); } }
-        let intruder = detect_port_scan();
-        if !intruder.is_empty() { let mut ev = e2.lock().unwrap(); ev.push(format!("port_scan: {}", intruder)); }
+        if !diffs.is_empty() {
+            let repaired = auto_repair();
+            let mut ev = e2.lock().unwrap();
+            for r in &repaired { ev.push(r.clone()); }
+        }
     });
 
-    let e3 = events.clone();
-    std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); let domain = check_phishing(); if !domain.is_empty() { let mut ev = e3.lock().unwrap(); ev.push(format!("phishing: {}", domain)); } });
-
-    let e4 = events.clone();
-    std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let mut ev = e4.lock().unwrap(); ev.push("ransomware: Canary files modified!".into()); } });
-
-    let e5 = events.clone();
-    std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let mut ev = e5.lock().unwrap(); ev.push(format!("usb: {}", usb)); } });
-
+    let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
+    let e4 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let mut ev = e4.lock().unwrap(); ev.push("ransomware: Canary files modified - disconnect now!".into()); } });
+    let e5 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let mut ev = e5.lock().unwrap(); ev.push(format!("usb: {}", usb)); } });
     loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
 fn random_seed() -> Vec<u8> { let r = SystemRandom::new(); let mut s = [0u8; 32]; r.fill(&mut s).unwrap(); s.to_vec() }
 fn token_str(seed: &[u8]) -> String { let c = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() / 30; let mut m = HmacSha256::new_from_slice(seed).unwrap(); m.update(&c.to_be_bytes()); hex::encode(m.finalize().into_bytes()) }
 fn collect_state() -> SystemState { SystemState { dns_servers: get_dns(), hosts_hash: get_hosts_hash(), startup_entries: get_startup(), listening_ports: get_ports(), firewall_profiles: get_firewall(), arp_table: get_arp(), wifi_ssid: get_wifi() } }
+
+fn backup_hosts() { let _ = fs::copy("C:\\Windows\\System32\\drivers\\etc\\hosts", HOSTS_BACKUP); }
+
+fn auto_repair() -> Vec<String> {
+    let mut fixed = Vec::new();
+    // Restore hosts file
+    if let Ok(orig) = fs::read_to_string(HOSTS_BACKUP) {
+        let cur = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts").unwrap_or_default();
+        if orig != cur {
+            let _ = fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig);
+            fixed.push("auto_repair: Hosts file restored".into());
+        }
+    }
+    // Reset DNS
+    let _ = Command::new("ipconfig").args(["/flushdns"]).output();
+    let _ = Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output();
+    fixed.push("auto_repair: DNS reset to automatic".into());
+    // Re-enable firewall
+    let _ = Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output();
+    fixed.push("auto_repair: Firewall re-enabled".into());
+    // Flush ARP
+    let _ = Command::new("arp").args(["-d"]).output();
+    fixed.push("auto_repair: ARP cache flushed".into());
+    fixed
+}
+
+fn clear_dns() { let _ = Command::new("ipconfig").args(["/flushdns"]).output(); }
+
+fn stealth_on() {
+    let _ = Command::new("powershell").args(["-NoProfile","-Command",
+        "Set-NetFirewallProfile -All -DefaultInboundAction Block;",
+        "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Disable-NetFirewallRule;",
+        "Get-NetFirewallRule -DisplayGroup 'File and Printer Sharing' | Disable-NetFirewallRule;",
+        "Stop-Service -Name 'FDResPub','SSDPSRV','upnphost' -Force;",
+        "Set-Service -Name 'FDResPub','SSDPSRV','upnphost' -StartupType Disabled;"
+    ]).output();
+}
+
+fn stealth_off() {
+    let _ = Command::new("powershell").args(["-NoProfile","-Command",
+        "Set-NetFirewallProfile -All -DefaultInboundAction Allow;",
+        "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Enable-NetFirewallRule;",
+        "Set-Service -Name 'FDResPub','SSDPSRV','upnphost' -StartupType Manual;"
+    ]).output();
+}
 
 fn get_dns() -> Vec<String> { let mut d = Vec::new(); if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object {$_.ServerAddresses.Count -gt 0} | ForEach-Object {$_.ServerAddresses -join ','}"]).output() { for l in String::from_utf8_lossy(&o.stdout).lines() { for a in l.split(',') { let a = a.trim().to_string(); if !a.is_empty() && !d.contains(&a) { d.push(a); } } } } if d.is_empty() { d.push("Unknown".into()); } d }
 fn get_hosts_hash() -> String { if let Ok(c) = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts") { hex::encode(ring::digest::digest(&ring::digest::SHA256, c.as_bytes())) } else { "unreadable".into() } }
@@ -166,22 +174,12 @@ fn check_usb() -> String { if let Ok(o) = Command::new("powershell").args(["-NoP
 
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
-    let ad: HashSet<&str> = a.dns_servers.iter().map(|s| s.as_str()).collect();
-    let bd: HashSet<&str> = b.dns_servers.iter().map(|s| s.as_str()).collect();
-    if ad != bd { d.push(("dns_change".into(), "DNS changed".into())); }
+    if a.dns_servers != b.dns_servers { d.push(("dns_change".into(), "DNS changed".into())); }
     if a.hosts_hash != b.hosts_hash { d.push(("hosts_change".into(), "Hosts modified".into())); }
-    let ae: HashSet<&str> = a.startup_entries.iter().map(|s| s.as_str()).collect();
-    let be: HashSet<&str> = b.startup_entries.iter().map(|s| s.as_str()).collect();
-    if ae != be { d.push(("startup_change".into(), "Startup changed".into())); }
-    let ap: HashSet<&str> = a.listening_ports.iter().map(|s| s.as_str()).collect();
-    let bp: HashSet<&str> = b.listening_ports.iter().map(|s| s.as_str()).collect();
-    if ap != bp { d.push(("port_change".into(), "Ports changed".into())); }
-    let af: HashSet<&str> = a.firewall_profiles.iter().map(|s| s.as_str()).collect();
-    let bf: HashSet<&str> = b.firewall_profiles.iter().map(|s| s.as_str()).collect();
-    if af != bf { d.push(("firewall_change".into(), "Firewall changed".into())); }
-    let aa: HashSet<&str> = a.arp_table.iter().map(|s| s.as_str()).collect();
-    let ba: HashSet<&str> = b.arp_table.iter().map(|s| s.as_str()).collect();
-    if aa != ba { d.push(("arp_change".into(), "ARP changed".into())); }
-    if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi changed to: {}", b.wifi_ssid))); }
+    if a.startup_entries != b.startup_entries { d.push(("startup_change".into(), "Startup changed".into())); }
+    if a.listening_ports != b.listening_ports { d.push(("port_change".into(), "Ports changed".into())); }
+    if a.firewall_profiles != b.firewall_profiles { d.push(("firewall_change".into(), "Firewall changed".into())); }
+    if a.arp_table != b.arp_table { d.push(("arp_change".into(), "ARP changed".into())); }
+    if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi: {}", b.wifi_ssid))); }
     d
 }
