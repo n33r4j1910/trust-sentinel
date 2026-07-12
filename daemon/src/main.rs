@@ -105,6 +105,27 @@ fn main() {
         }
     });
 
+    // Auto-stealth: enable on new WiFi, disable on trusted
+    let e_stealth = events.clone();
+    std::thread::spawn(move || {
+        let mut known_wifi: HashSet<String> = HashSet::new();
+        // Learn current WiFi as trusted
+        let current = get_wifi();
+        if current != "Unknown" { known_wifi.insert(current); }
+        loop {
+            std::thread::sleep(Duration::from_secs(30));
+            let ssid = get_wifi();
+            if ssid != "Unknown" && !known_wifi.contains(&ssid) {
+                stealth_on();
+                let mut ev = e_stealth.lock().unwrap();
+                ev.push(format!("auto_stealth: New WiFi '{}' - stealth enabled", ssid));
+                known_wifi.insert(ssid);
+            } else if ssid != "Unknown" && known_wifi.contains(&ssid) {
+                stealth_off();
+            }
+        }
+    });
+
     let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
     let e4 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let mut ev = e4.lock().unwrap(); ev.push("ransomware: Canary files modified - disconnect now!".into()); } });
     let e5 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let mut ev = e5.lock().unwrap(); ev.push(format!("usb: {}", usb)); } });
