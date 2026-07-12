@@ -1,148 +1,314 @@
-Trust Sentinel
+# 🛡️ Trust Sentinel
 
-**Your device's silent guardian. No cloud. No nonsense.**
+> **Your device's silent guardian. No cloud. No nonsense.**
 
-Trust Sentinel answers one question, every 30 seconds: *"Can this device still be trusted right now?"*
+Trust Sentinel answers one question every **30 seconds**:
 
----
+> **"Can this device still be trusted right now?"**
 
-## What It Is
-
-Trust Sentinel is a lightweight, hardware-rooted endpoint trust agent. Think of it as a **smoke alarm for your device** — always on, silent, and loud when something's actually wrong.
-
-It's not antivirus. It's not EDR. It doesn't scan files or chase virus signatures. It watches the handful of signals that actually matter — and fights back when someone attacks.
+Unlike traditional antivirus software, Trust Sentinel continuously monitors your system's trust and integrity, detects suspicious changes, automatically repairs common security issues, and helps protect your device from network-based attacks—all while remaining completely offline.
 
 ---
 
-## Why You Need It
+## 🚀 What is Trust Sentinel?
 
-Your antivirus looks for known malware. Your firewall blocks suspicious traffic. But who's watching for:
+Trust Sentinel is a lightweight **endpoint trust agent**.
 
-- Your hosts file being hijacked?
-- Your DNS servers being changed?
-- A new program adding itself to startup?
-- Someone scanning your ports right now?
-- PowerShell running suspicious commands?
-- Your SSH keys being accessed?
+Think of it as a **smoke alarm for your computer**.
 
-**Trust Sentinel watches all of this. And it fights back.**
+- ✅ Always running
+- ✅ Silent until something is wrong
+- ✅ Detects security changes instantly
+- ✅ Automatically repairs common threats
+- ✅ Completely offline
 
----
+It is **not** an antivirus or EDR.
 
-## What It Does
-
-### 🔐 Trust Shield
-Every 30 seconds, Trust Sentinel generates a 64-character trust token using a secret sealed inside your TPM 2.0 chip. If anything tampers with your boot chain, the token stops. No token = no trust.
-
-### 📋 Integrity Monitoring
-Takes a snapshot of your system's clean state — DNS, hosts file, startup programs, open ports, firewall status, Windows Update. Every 5 minutes, it checks. Something changed? You'll know.
-
-### 🔴 Intrusion Detection & Auto-Blocking
-- **Port scans** → detected and attacker IP automatically blocked
-- **Brute force logins** → detected and RDP port automatically blocked
-- **Suspicious PowerShell** → flagged
-- **Credential file access** → flagged
-- **USB storage devices** → flagged
-- **New network connections** → flagged
-- **Phishing domains** → checked against 80,000+ known bad domains
-- **Ransomware** → canary files and mass write detection
-
-### 🩹 Self-Healing
-If something crashes, it restarts. If the baseline gets stale, it resets. If logs get too big, they rotate. Trust Sentinel takes care of itself.
-
-### 🖥️ Settings Dashboard
-Open `http://127.0.0.1:12788/dashboard` and you get a clean panel to toggle features, adjust intervals, view events, and export logs. No cloud. No accounts.
+Instead of scanning millions of files or downloading virus signatures, Trust Sentinel watches the handful of security signals that actually matter.
 
 ---
 
-## What It Doesn't Do
+# 🎯 Why Trust Sentinel?
 
-- ❌ No file scanning (use Windows Defender)
-- ❌ No virus signatures
-- ❌ No AI models
-- ❌ No cloud uploads
-- ❌ No user tracking
-- ❌ No packet inspection
-- ❌ No interference with other software
+Your existing security tools already do a good job...
 
-**Trust Sentinel is the smoke alarm. Your antivirus is the fire extinguisher. Your firewall is the locked door. You need all three.**
+- Windows Defender scans malware.
+- Your Firewall blocks unwanted connections.
+- Browser Safe Browsing blocks many malicious websites.
+
+But who watches for things like:
+
+- Hosts file hijacking?
+- DNS server changes?
+- Startup persistence?
+- Active port scanning?
+- ARP spoofing?
+- Rogue Wi-Fi hotspots?
+- Ransomware encryption?
+- Firewall being disabled?
+- Phishing domains already cached on your PC?
+
+**Trust Sentinel does.**
+
+It detects these attacks immediately—and whenever possible, repairs them automatically.
 
 ---
 
-## Quick Start
+# ✨ Key Features
 
-### You'll need
-- Windows 10 or 11 (64-bit)
-- [Rust](https://rustup.rs) installed
-- TPM 2.0 recommended (works without it)
+## 🔍 Integrity Monitoring
 
-### Build and run
-```bash
-git clone https://github.com/n33r4j1910/trust-sentinel.git
-cd trust-sentinel
-cargo build --release
-target\release\trust-sentinel-daemon.exe
+Trust Sentinel creates a trusted baseline of your system and continuously compares it against the current state.
 
-Open http://127.0.0.1:12788 for the API, or http://127.0.0.1:12788/dashboard for the settings panel.
+Monitored items include:
 
-Trust States
+- DNS configuration
+- Hosts file
+- Startup applications
+- Listening ports
+- Windows Firewall
+- ARP table
+- Connected Wi-Fi SSID
 
-State	Meaning
-🟢 Trusted	No unauthorized changes detected
-🟡 Warning	One change detected — worth a look
-🔴 Compromised	Multiple changes or tampering — action needed
+Every few minutes, the baseline is verified.
 
-Complete Feature List
+If something changes unexpectedly—you'll know.
 
-Category	Features
-Trust		TPM 2.0 PCR-bound encryption, rotating HMAC-SHA256 token, AES-256-GCM encrypted logs
-Integrity	DNS, hosts, startup, ports, firewall, Windows Update
-Detection	Port scan, brute force, risky ports, suspicious commands, credential access, USB, phishing domains, ransomware
-Prevention	Auto-block attacker IPs, auto-block RDP on brute force
-Self-Protection	Binary integrity check, memory-locked seed, ACL folder lock, watchdog, self-healing, log rotation, unkillable daemon
-UX		System tray (green/yellow/red), settings dashboard, export logs, reset baseline
-Privacy		100% offline, no cloud, no telemetry, localhost only
+---
 
-System Impact
+## 🚨 Intrusion Detection
 
-Metric	Value
-CPU (idle)	<0.1%
-RAM		~30 MB
-Disk		<10 MB
-Network		None
-Runs fine on older laptops. Won't slow you down.
+Trust Sentinel detects active attacks including:
 
-How It Compares
+- 🔍 Port scans
+- 🌐 ARP spoofing (MITM)
+- 📶 Rogue / Evil Twin Wi-Fi
+- 🎣 Phishing domains (80,000+ blacklist)
+- 🔐 Ransomware (Canary file monitoring)
+- 💾 USB storage insertion
 
-Threat				Antivirus	Firewall	Trust Sentinel
-Known malware			✅		❌		❌
-Suspicious network traffic	❌		✅		✅ + blocks
-Hosts file hijacking		❌		❌		✅
-DNS poisoning			❌		❌		✅
-New startup persistence		⚠️		❌		✅
-Firewall disabled		❌		❌		✅
-Port scans			❌		❌		✅ + blocks
-Brute force logins		❌		❌		✅ + blocks
-Suspicious PowerShell		⚠️		❌		✅
-USB storage insertion		❌		❌		✅
-Ransomware behavior		⚠️		❌		✅
-Phishing domains		❌		❌		✅ (80K+ list)
-Hardware trust (TPM)		❌		❌		✅
-Privacy
+---
 
-Everything stays on your device. Period, No accounts required, No API keys, No telemetry, No cloud uploads, HTTP server only accessible from your own machine
+## 🩹 Automatic Self-Healing
 
-Known Limitations
+When possible, Trust Sentinel repairs security issues automatically.
 
-Credential guard detects file writes, not reads (Windows audit policy required for read detection)
+| Threat | Action |
+|---------|--------|
+| Hosts file hijacked | Restore from trusted backup |
+| DNS modified | Reset to automatic |
+| Firewall disabled | Re-enable Firewall |
+| ARP poisoning | Flush ARP cache |
+| DNS cache poisoning | Clear DNS cache |
 
-User-context features (credential monitoring, USB detection) work best when run as logged-in user
+---
 
-Some checks use PowerShell (native API migration in progress)
+## 🥷 Stealth Mode
 
+One click makes your device nearly invisible on public networks.
 
-Keywords
+Stealth Mode:
 
-endpoint-security trust-agent device-integrity tpm-2.0 hmac-sha256 zero-trust offline privacy-first rust windows-security intrusion-detection port-scan brute-force ransomware phishing self-healing hardware-rooted-trust open-source lightweight no-cloud
+- Disables Network Discovery
+- Blocks incoming connections
+- Stops File Sharing
+- Reduces attack surface
 
-MIT © 2026
+Perfect for:
+
+- Airports
+- Hotels
+- Cafés
+- Conferences
+- Public Wi-Fi
+
+---
+
+## 💚 System Tray Status
+
+Trust Sentinel always stays in your system tray.
+
+| Status | Meaning |
+|---------|---------|
+| 🟢 **Trusted** | Everything is healthy |
+| 🟡 **Warning** | A change requires attention |
+| 🔴 **Compromised** | Active attack or multiple issues |
+| 🥷 **Stealth** | Device hidden from network |
+
+Hover over the icon to view detected issues and recommended actions.
+
+---
+
+# ❌ What Trust Sentinel Doesn't Do
+
+Trust Sentinel intentionally focuses on system trust—not malware scanning.
+
+It does **not**:
+
+- ❌ Scan files
+- ❌ Use virus signatures
+- ❌ Run AI models
+- ❌ Upload your data
+- ❌ Track users
+- ❌ Inspect network packets
+- ❌ Replace your antivirus
+
+Think of your security like this:
+
+| Tool | Purpose |
+|------|---------|
+| Antivirus | Fire extinguisher |
+| Firewall | Locked front door |
+| **Trust Sentinel** | Smoke alarm |
+
+You need all three.
+
+---
+
+# ⚡ Quick Start
+
+1. Download the latest release.
+2. Extract `TrustSentinel.zip`.
+3. Run `TrustSentinel.exe`.
+4. Allow Administrator permissions (recommended).
+5. Let Trust Sentinel create your trusted baseline.
+6. Continue using your PC normally.
+
+---
+
+# 🛡️ Trust States
+
+| State | Meaning |
+|-------|---------|
+| 🟢 **Trusted** | No unauthorized changes detected |
+| 🟡 **Warning** | One suspicious change detected |
+| 🔴 **Compromised** | Multiple changes or attack in progress |
+| 🥷 **Stealth** | Device hidden from network |
+
+---
+
+# 📋 Complete Feature List
+
+| Category | Features |
+|----------|----------|
+| **Integrity Monitoring** | DNS, Hosts file, Startup Programs, Listening Ports, Firewall, ARP Table, Wi-Fi SSID |
+| **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware Canaries, USB Storage, Evil Twin Wi-Fi |
+| **Automatic Repair** | Hosts Restore, DNS Reset, Firewall Recovery, ARP Flush, DNS Cache Clear |
+| **Stealth Mode** | Block Incoming Connections, Disable Discovery, Stop File Sharing |
+| **User Experience** | System Tray, Rich Tooltips, Baseline Reset, One-Click Repair |
+| **Privacy** | Fully Offline, No Accounts, No Telemetry, Localhost Only |
+
+---
+
+# ⚙️ Performance
+
+Designed to stay invisible.
+
+| Metric | Usage |
+|--------|-------|
+| CPU (Idle) | **<0.1%** |
+| RAM | **~30 MB** |
+| Disk Space | **<10 MB** |
+| Network Usage | **None** |
+
+Runs comfortably on older laptops without affecting performance.
+
+---
+
+# 📊 Comparison
+
+| Capability | Antivirus | Firewall | Trust Sentinel |
+|------------|-----------|----------|----------------|
+| Known Malware | ✅ | ❌ | ❌ |
+| Hosts File Hijacking | ❌ | ❌ | ✅ Auto Repair |
+| DNS Poisoning | ❌ | ❌ | ✅ Auto Repair |
+| ARP Spoofing | ❌ | ❌ | ✅ Auto Repair |
+| Firewall Disabled | ❌ | ❌ | ✅ Auto Repair |
+| Port Scan Detection | ❌ | ❌ | ✅ |
+| Ransomware Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection |
+| Phishing Domains | ❌ | ❌ | ✅ 80K+ Database |
+| USB Storage Detection | ❌ | ❌ | ✅ |
+| Startup Persistence | ⚠️ Partial | ❌ | ✅ |
+| Evil Twin Wi-Fi | ❌ | ❌ | ✅ |
+| Stealth Mode | ❌ | ❌ | ✅ |
+
+---
+
+# 🔒 Privacy First
+
+Trust Sentinel was designed around one principle:
+
+> **Your security should never come at the cost of your privacy.**
+
+- ✅ 100% Offline
+- ✅ No Cloud Services
+- ✅ No Accounts
+- ✅ No Login
+- ✅ No API Keys
+- ✅ No Telemetry
+- ✅ No Analytics
+- ✅ No Tracking
+- ✅ Localhost Only
+
+**Everything stays on your device. Period.**
+
+---
+
+# ⚠️ Current Limitations
+
+- Hosts file repair requires Administrator privileges.
+- Some system checks currently rely on PowerShell (native Windows API migration is underway).
+- Credential Guard currently detects file **writes**, not **reads**.
+- Read detection requires Windows Audit Policies.
+- User-context features (USB monitoring and credential monitoring) work best when running under the logged-in user account.
+
+---
+
+# 🛣️ Roadmap
+
+Future improvements include:
+
+- Native Windows API implementation
+- TPM-backed hardware trust verification
+- Secure Boot verification
+- BitLocker health monitoring
+- Secure process monitoring
+- Driver integrity verification
+- Certificate trust monitoring
+- Plugin architecture
+- Linux support
+- macOS support
+
+---
+
+# 🏷️ Keywords
+
+```
+endpoint-security
+trust-agent
+device-integrity
+zero-trust
+offline
+privacy-first
+windows-security
+intrusion-detection
+self-healing
+ransomware
+phishing
+port-scan
+arp-spoofing
+hardware-rooted-trust
+tpm-2.0
+rust
+lightweight
+no-cloud
+open-source
+```
+
+---
+
+# 📄 License
+
+Licensed under the **MIT License**.
+
+© 2026 Trust Sentinel
