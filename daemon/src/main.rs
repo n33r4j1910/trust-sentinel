@@ -57,6 +57,16 @@ fn main() {
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
 
+                if req.contains("POST /home") {
+                    let ssid = get_wifi();
+                    let _ = fs::write(std::path::PathBuf::from(DATA_DIR).join("home_wifi.txt"), &ssid);
+                    stealth_off();
+                    let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec![format!("Home WiFi set: {}", ssid)] };
+                    let json = serde_json::to_string(&st).unwrap();
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    continue;
+                }
+
                 if req.contains("POST /reset") {
                     let _ = fs::remove_file(std::path::PathBuf::from(DATA_DIR).join("stealth.flag"));
                     let cur = collect_state(); *b1.lock().unwrap() = cur; e1.lock().unwrap().clear();
@@ -113,24 +123,21 @@ fn main() {
         }
     });
 
-    // Auto-stealth: home WiFi trusted, everything else = stealth
+    // Auto-stealth: default stealth ON, only off on home WiFi
     let e_stealth = events.clone();
     std::thread::spawn(move || {
-        let mut home_wifi: HashSet<String> = HashSet::new();
-        let first = get_wifi();
-        if first != "Unknown" { home_wifi.insert(first); }
+        let home_file = std::path::PathBuf::from(DATA_DIR).join("home_wifi.txt");
+        // Default: enable stealth on startup
+        stealth_on();
         loop {
             std::thread::sleep(Duration::from_secs(30));
-            let ssid = get_wifi();
-            if ssid != "Unknown" {
-                if home_wifi.contains(&ssid) {
+            if let Ok(home) = fs::read_to_string(&home_file) {
+                let home = home.trim().to_string();
+                let current = get_wifi();
+                if !home.is_empty() && current == home {
                     stealth_off();
-                } else {
+                } else if !home.is_empty() && current != home && current != "Unknown" {
                     stealth_on();
-                    let mut ev = e_stealth.lock().unwrap();
-                    if !ev.iter().any(|e| e.contains(&ssid)) {
-                        ev.push(format!("auto_stealth: Public WiFi '{}' - stealth enabled", ssid));
-                    }
                 }
             }
         }
