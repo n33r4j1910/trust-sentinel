@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 use serde::Deserialize;
+use std::process::Command as Cmd;
 use std::{thread, time::Duration};
 use tray_icon::TrayIconBuilder;
 
@@ -31,7 +32,7 @@ fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
 }
 
 fn main() {
-    println!("Starting tray...");
+    println!("Starting Trust Sentinel tray...");
     let client = Client::new();
     let icon_green = make_icon(0, 255, 0);
     let icon_yellow = make_icon(255, 255, 0);
@@ -46,6 +47,8 @@ fn main() {
         .unwrap();
     println!("Tray created");
 
+    let mut last_state = String::new();
+
     loop {
         if let Ok(resp) = client.get("http://127.0.0.1:12789").send() {
             if let Ok(status) = resp.json::<DaemonStatus>() {
@@ -57,28 +60,44 @@ fn main() {
                 let (icon, tooltip): (tray_icon::Icon, String) = match status.trust_state.as_str() {
                     "Trusted" => (
                         icon_green.clone(),
-                        "🟢 Trust Sentinel - All Good\nYour device is safe.".to_string()
+                        "Trust Sentinel - All Good\nYour device is safe.".to_string()
                     ),
                     "Stealth" => (
                         icon_orange.clone(),
-                        "🟠 Stealth Mode Active\nYour device is hidden on this network.\n\nFirewall: Blocking incoming\nNetwork Discovery: OFF\nFile Sharing: OFF".to_string()
+                        "Trust Sentinel - Stealth Mode\nYour device is hidden on this network.".to_string()
                     ),
                     "Visible" => (
                         icon_green.clone(),
-                        "🟢 Visible - Stealth deactivated".to_string()
+                        "Trust Sentinel - Visible\nStealth deactivated. Device is visible.".to_string()
                     ),
                     "Warning" => (
                         icon_yellow.clone(),
-                        format!("🟡 Warning!\nChanges:\n{}\n\nOpen http://127.0.0.1:12789", events_text)
+                        format!("Trust Sentinel - Warning!\n\nChanges detected:\n{}\n\nA details window will open automatically.", events_text)
                     ),
                     "Compromised" => (
                         icon_red.clone(),
-                        format!("🔴 COMPROMISED!\n{}\n\nDISCONNECT NOW!", events_text)
+                        format!("Trust Sentinel - COMPROMISED!\n\n{}\n\nA repair window will open automatically.", events_text)
                     ),
-                    _ => (icon_gray.clone(), "Checking...".to_string()),
+                    _ => (icon_gray.clone(), "Trust Sentinel - Checking...".to_string()),
                 };
                 tray.set_icon(Some(icon)).ok();
                 tray.set_tooltip(Some(tooltip)).ok();
+
+                // Show popup + open browser on Warning or Compromised
+                if (status.trust_state == "Warning" || status.trust_state == "Compromised") && last_state != status.trust_state {
+                    let msg = if status.trust_state == "Warning" {
+                        "Trust Sentinel: Warning - Something changed on your system. Opening details..."
+                    } else {
+                        "Trust Sentinel: COMPROMISED! Multiple threats detected. Opening repair panel..."
+                    };
+                    let _ = Cmd::new("powershell")
+                        .args(["-NoProfile", "-Command", 
+                            &format!("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Warning; $n.Visible = $true; $n.ShowBalloonTip(10000, 'Trust Sentinel', '{}', 'Warning'); Start-Sleep 10; $n.Dispose()", msg)
+                        ])
+                        .spawn();
+                    let _ = Cmd::new("cmd").args(["/c", "start", "http://127.0.0.1:12789"]).spawn();
+                }
+                last_state = status.trust_state;
             }
         }
         thread::sleep(Duration::from_secs(2));
