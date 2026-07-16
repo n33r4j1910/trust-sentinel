@@ -31,17 +31,20 @@ fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
 }
 
 fn main() {
+    println!("Starting tray...");
     let client = Client::new();
     let icon_green = make_icon(0, 255, 0);
     let icon_yellow = make_icon(255, 255, 0);
     let icon_red = make_icon(255, 0, 0);
     let icon_gray = make_icon(128, 128, 128);
+    let icon_orange = make_icon(255, 140, 0);
 
     let mut tray = TrayIconBuilder::new()
         .with_icon(icon_gray.clone())
         .with_tooltip("Trust Sentinel - Starting...")
         .build()
         .unwrap();
+    println!("Tray created");
 
     loop {
         if let Ok(resp) = client.get("http://127.0.0.1:12789").send() {
@@ -54,17 +57,25 @@ fn main() {
                 let (icon, tooltip): (tray_icon::Icon, String) = match status.trust_state.as_str() {
                     "Trusted" => (
                         icon_green.clone(),
-                        "🟢 Trust Sentinel - All Good\nYour device is safe. No unauthorized changes detected.\n\nOpen http://127.0.0.1:12789 for details".to_string()
+                        "🟢 Trust Sentinel - All Good\nYour device is safe.".to_string()
+                    ),
+                    "Stealth" => (
+                        icon_orange.clone(),
+                        "🟠 Stealth Mode Active\nYour device is hidden on this network.\n\nFirewall: Blocking incoming\nNetwork Discovery: OFF\nFile Sharing: OFF".to_string()
+                    ),
+                    "Visible" => (
+                        icon_green.clone(),
+                        "🟢 Visible - Stealth deactivated".to_string()
                     ),
                     "Warning" => (
                         icon_yellow.clone(),
-                        format!("🟡 Trust Sentinel - Warning!\nSomething changed on your system.\n\nRecent changes:\n{}\n\nWhat to do:\n1. Open http://127.0.0.1:12789\n2. If the change was you, it's safe\n3. If unexpected, investigate immediately", events_text)
+                        format!("🟡 Warning!\nChanges:\n{}\n\nOpen http://127.0.0.1:12789", events_text)
                     ),
                     "Compromised" => (
                         icon_red.clone(),
-                        format!("🔴 Trust Sentinel - COMPROMISED!\nMultiple unauthorized changes detected!\n\nRecent:\n{}\n\nWhat to do:\n1. DISCONNECT from network\n2. Open http://127.0.0.1:12789\n3. Run antivirus scan\n4. Check hosts file and DNS", events_text)
+                        format!("🔴 COMPROMISED!\n{}\n\nDISCONNECT NOW!", events_text)
                     ),
-                    _ => (icon_gray.clone(), "Trust Sentinel - Checking...".to_string()),
+                    _ => (icon_gray.clone(), "Checking...".to_string()),
                 };
                 tray.set_icon(Some(icon)).ok();
                 tray.set_tooltip(Some(tooltip)).ok();

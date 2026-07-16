@@ -58,6 +58,7 @@ fn main() {
                 let req = String::from_utf8_lossy(&buf[..n]);
 
                 if req.contains("POST /reset") {
+                    let _ = fs::remove_file(std::path::PathBuf::from(DATA_DIR).join("stealth.flag"));
                     let cur = collect_state(); *b1.lock().unwrap() = cur; e1.lock().unwrap().clear();
                     let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec![] };
                     let json = serde_json::to_string(&st).unwrap();
@@ -67,6 +68,14 @@ fn main() {
                 if req.contains("POST /stealth") { stealth_on(); let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth ON".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
                 if req.contains("POST /visible") { stealth_off(); let st = DaemonStatus { trust_state: "Visible".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth OFF".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
                 if req.contains("POST /repair") { let fixed = auto_repair(); let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: fixed }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
+
+                let stealth_flag = std::path::PathBuf::from(DATA_DIR).join("stealth.flag");
+                if stealth_flag.exists() {
+                    let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth mode active - device hidden".into()] };
+                    let json = serde_json::to_string(&st).unwrap();
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    continue;
+                }
 
                 let cur = collect_state();
                 let bl = b1.lock().unwrap(); let ev = e1.lock().unwrap();
@@ -91,7 +100,6 @@ fn main() {
         }
     });
 
-    // Integrity checker with auto-repair
     let b2 = baseline.clone(); let e2 = events.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(300));
@@ -105,23 +113,25 @@ fn main() {
         }
     });
 
-    // Auto-stealth: enable on new WiFi, disable on trusted
+    // Auto-stealth: home WiFi trusted, everything else = stealth
     let e_stealth = events.clone();
     std::thread::spawn(move || {
-        let mut known_wifi: HashSet<String> = HashSet::new();
-        // Learn current WiFi as trusted
-        let current = get_wifi();
-        if current != "Unknown" { known_wifi.insert(current); }
+        let mut home_wifi: HashSet<String> = HashSet::new();
+        let first = get_wifi();
+        if first != "Unknown" { home_wifi.insert(first); }
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let ssid = get_wifi();
-            if ssid != "Unknown" && !known_wifi.contains(&ssid) {
-                stealth_on();
-                let mut ev = e_stealth.lock().unwrap();
-                ev.push(format!("auto_stealth: New WiFi '{}' - stealth enabled", ssid));
-                known_wifi.insert(ssid);
-            } else if ssid != "Unknown" && known_wifi.contains(&ssid) {
-                stealth_off();
+            if ssid != "Unknown" {
+                if home_wifi.contains(&ssid) {
+                    stealth_off();
+                } else {
+                    stealth_on();
+                    let mut ev = e_stealth.lock().unwrap();
+                    if !ev.iter().any(|e| e.contains(&ssid)) {
+                        ev.push(format!("auto_stealth: Public WiFi '{}' - stealth enabled", ssid));
+                    }
+                }
             }
         }
     });
@@ -140,30 +150,24 @@ fn backup_hosts() { let _ = fs::copy("C:\\Windows\\System32\\drivers\\etc\\hosts
 
 fn auto_repair() -> Vec<String> {
     let mut fixed = Vec::new();
-    // Restore hosts file
     if let Ok(orig) = fs::read_to_string(HOSTS_BACKUP) {
         let cur = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts").unwrap_or_default();
-        if orig != cur {
-            let _ = fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig);
-            fixed.push("auto_repair: Hosts file restored".into());
-        }
+        if orig != cur { let _ = fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig); fixed.push("auto_repair: Hosts restored".into()); }
     }
-    // Reset DNS
     let _ = Command::new("ipconfig").args(["/flushdns"]).output();
     let _ = Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output();
-    fixed.push("auto_repair: DNS reset to automatic".into());
-    // Re-enable firewall
+    fixed.push("auto_repair: DNS reset".into());
     let _ = Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output();
     fixed.push("auto_repair: Firewall re-enabled".into());
-    // Flush ARP
     let _ = Command::new("arp").args(["-d"]).output();
-    fixed.push("auto_repair: ARP cache flushed".into());
+    fixed.push("auto_repair: ARP flushed".into());
     fixed
 }
 
 fn clear_dns() { let _ = Command::new("ipconfig").args(["/flushdns"]).output(); }
 
 fn stealth_on() {
+    let _ = fs::write(std::path::PathBuf::from(DATA_DIR).join("stealth.flag"), "1");
     let _ = Command::new("powershell").args(["-NoProfile","-Command",
         "Set-NetFirewallProfile -All -DefaultInboundAction Block;",
         "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Disable-NetFirewallRule;",
@@ -174,6 +178,7 @@ fn stealth_on() {
 }
 
 fn stealth_off() {
+    let _ = fs::remove_file(std::path::PathBuf::from(DATA_DIR).join("stealth.flag"));
     let _ = Command::new("powershell").args(["-NoProfile","-Command",
         "Set-NetFirewallProfile -All -DefaultInboundAction Allow;",
         "Get-NetFirewallRule -DisplayGroup 'Network Discovery' | Enable-NetFirewallRule;",
