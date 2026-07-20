@@ -186,7 +186,7 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
     for port_binding in &ports {
         if let Some(port) = port_binding.split(':').last() {
             if let Ok(p) = port.parse::<u16>() {
-                if p != HTTP_PORT && p != 445 && p != 135 && p != 139 {
+                if p != HTTP_PORT && p != 445 && p != 135 && p != 139 && p < 49152 {
                     let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("New-NetFirewallRule -DisplayName 'TS-Block-Port-{}' -Direction Inbound -LocalPort {} -Action Block", p, p)]).output();
                     fixed.push(format!("auto_repair: Blocked new port {}", p));
                 }
@@ -241,5 +241,6 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi: {}", b.wifi_ssid))); }
     d
 }
+
 
 
