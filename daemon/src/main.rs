@@ -41,6 +41,8 @@ struct DaemonStatus {
 }
 
 fn main() {
+    setup_startup();
+    download_phishing_list();
     let _ = fs::create_dir_all(DATA_DIR);
     backup_hosts();
     let seed = random_seed();
@@ -61,7 +63,7 @@ fn main() {
 
                 if req.contains("POST /home") {
                     let ssid = get_wifi();
-                    let _ = fs::write(std::path::PathBuf::from(DATA_DIR).join("home_wifi.txt"), &ssid);
+                    let _ = fs::write(std::path::PathBuf::from(DATA_DIR).join("home_wifi.txt"), ssid.trim());
                     stealth_off();
                     let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec![format!("Home WiFi set: {}", ssid)] };
                     let json = serde_json::to_string(&st).unwrap();
@@ -136,7 +138,7 @@ fn main() {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             if let Ok(home) = fs::read_to_string(&home_file) {
-                let home = home.trim().to_string();
+                let home = home.trim().to_string(); if home.is_empty() { continue; }
                 let current = get_wifi();
                 if !home.is_empty() && current == home {
                     stealth_off();
@@ -151,6 +153,16 @@ fn main() {
     let e_usb = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false", usb)]).output(); let mut ev = e_usb.lock().unwrap(); ev.push(format!("auto_eject: {} disabled", usb)); } });
     let e_ransom = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let _ = Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output(); let mut ev = e_ransom.lock().unwrap(); ev.push("auto_kill: Network disabled - ransomware detected!".into()); } });
     let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
+        // Weekly phishing blocklist refresh
+    let e_phish = events.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(604800));
+        let path = std::path::PathBuf::from(DATA_DIR).join("phishing_hosts.txt");
+        let _ = std::fs::remove_file(&path);
+        let _ = Command::new("powershell").args(["-NoProfile","-Command","Invoke-WebRequest -Uri 'https://someonewhocares.org/hosts/zero/hosts' -OutFile 'C:\\ProgramData\\Trust Sentinel\\phishing_hosts.txt' -ErrorAction SilentlyContinue"]).output();
+        let mut ev = e_phish.lock().unwrap();
+        ev.push("phishing_list: Updated to latest version".into());
+    });
     loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
@@ -241,6 +253,23 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi: {}", b.wifi_ssid))); }
     d
 }
+fn download_phishing_list() {
+    let path = std::path::PathBuf::from(DATA_DIR).join("phishing_hosts.txt");
+    if !path.exists() {
+        std::thread::spawn(|| {
+            let _ = Command::new("powershell").args(["-NoProfile","-Command","Invoke-WebRequest -Uri 'https://someonewhocares.org/hosts/zero/hosts' -OutFile 'C:\\ProgramData\\Trust Sentinel\\phishing_hosts.txt' -ErrorAction SilentlyContinue"]).output();
+        });
+    }
+}
+
+fn setup_startup() {
+    let link = std::path::PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup\\TrustSentinel.lnk");
+    if !link.exists() {
+        let _ = Command::new("powershell").args(["-NoProfile","-Command","$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut($env:APPDATA + '\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\TrustSentinel.lnk'); $sc.TargetPath = 'wscript.exe'; $sc.Arguments = $env:ProgramData + '\\Trust Sentinel\\start_silent.vbs'; $sc.WindowStyle = 7; $sc.Save()"]).output();
+    }
+}
+
+
 
 
 
