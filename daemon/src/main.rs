@@ -47,7 +47,6 @@ fn main() {
     let baseline = Arc::new(Mutex::new(collect_state()));
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let known_startup: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-    // Learn current startup entries as trusted
     for entry in get_startup() { known_startup.lock().unwrap().insert(entry); }
 
     let b1 = baseline.clone(); let e1 = events.clone(); let s1 = seed.clone();
@@ -80,7 +79,7 @@ fn main() {
                 }
                 if req.contains("POST /stealth") { stealth_on(); let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth ON".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
                 if req.contains("POST /visible") { stealth_off(); let st = DaemonStatus { trust_state: "Visible".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth OFF".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
-                if req.contains("POST /repair") { let fixed = auto_repair(&known_startup); let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: fixed }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
+                
 
                 let stealth_flag = std::path::PathBuf::from(DATA_DIR).join("stealth.flag");
                 if stealth_flag.exists() {
@@ -113,14 +112,17 @@ fn main() {
         }
     });
 
+    // Integrity checker - SKIPS auto-repair when stealth is active
     let b2 = baseline.clone(); let e2 = events.clone(); let k1 = known_startup.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(300));
+        let stealth_flag = std::path::PathBuf::from(DATA_DIR).join("stealth.flag");
+        if stealth_flag.exists() { continue; }
         let cur = collect_state();
         let bl = b2.lock().unwrap();
         let diffs = diff(&bl, &cur);
         if !diffs.is_empty() {
-            let repaired = auto_repair(&known_startup);
+            let repaired = auto_repair(&k1);
             let mut ev = e2.lock().unwrap();
             for r in &repaired { ev.push(r.clone()); }
         }
@@ -145,43 +147,10 @@ fn main() {
         }
     });
 
-    // Port scan auto-blocker
-    let e_scan = events.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(10));
-        let intruder = detect_port_scan();
-        if !intruder.is_empty() {
-            let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("New-NetFirewallRule -DisplayName 'TS-Block-{}' -Direction Inbound -RemoteAddress '{}' -Action Block", intruder, intruder)]).output();
-            let mut ev = e_scan.lock().unwrap();
-            ev.push(format!("auto_block: {} blocked via firewall", intruder));
-        }
-    });
-
-    // USB auto-eject
-    let e_usb = events.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(30));
-        let usb = check_usb();
-        if !usb.is_empty() {
-            let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false", usb)]).output();
-            let mut ev = e_usb.lock().unwrap();
-            ev.push(format!("auto_eject: {} disabled", usb));
-        }
-    });
-
-    // Ransomware network kill
-    let e_ransom = events.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(30));
-        if check_ransomware() {
-            let _ = Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output();
-            let mut ev = e_ransom.lock().unwrap();
-            ev.push("auto_kill: Network disabled - ransomware detected!".into());
-        }
-    });
-
+    let e_scan = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(10)); let intruder = detect_port_scan(); if !intruder.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("New-NetFirewallRule -DisplayName 'TS-Block-{}' -Direction Inbound -RemoteAddress '{}' -Action Block", intruder, intruder)]).output(); let mut ev = e_scan.lock().unwrap(); ev.push(format!("auto_block: {} blocked", intruder)); } });
+    let e_usb = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false", usb)]).output(); let mut ev = e_usb.lock().unwrap(); ev.push(format!("auto_eject: {} disabled", usb)); } });
+    let e_ransom = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let _ = Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output(); let mut ev = e_ransom.lock().unwrap(); ev.push("auto_kill: Network disabled - ransomware detected!".into()); } });
     let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
-    let e5 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let mut ev = e5.lock().unwrap(); ev.push(format!("usb: {} - ejected", usb)); } });
     loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
@@ -193,22 +162,17 @@ fn backup_hosts() { let _ = fs::copy("C:\\Windows\\System32\\drivers\\etc\\hosts
 
 fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
     let mut fixed = Vec::new();
-    // Restore hosts
     if let Ok(orig) = fs::read_to_string(HOSTS_BACKUP) {
         let cur = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts").unwrap_or_default();
         if orig != cur { let _ = fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig); fixed.push("auto_repair: Hosts restored".into()); }
     }
-    // Reset DNS
     let _ = Command::new("ipconfig").args(["/flushdns"]).output();
     let _ = Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output();
     fixed.push("auto_repair: DNS reset".into());
-    // Re-enable firewall
     let _ = Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output();
     fixed.push("auto_repair: Firewall re-enabled".into());
-    // Flush ARP
     let _ = Command::new("arp").args(["-d"]).output();
     fixed.push("auto_repair: ARP flushed".into());
-    // Remove unknown startup entries
     let current_startup: HashSet<String> = get_startup().into_iter().collect();
     let trusted = known_startup.lock().unwrap();
     for entry in &current_startup {
@@ -218,7 +182,6 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
             fixed.push(format!("auto_repair: Removed unknown startup: {}", entry));
         }
     }
-    // Block new listening ports
     let ports = get_ports();
     for port_binding in &ports {
         if let Some(port) = port_binding.split(':').last() {
@@ -278,5 +241,4 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi: {}", b.wifi_ssid))); }
     d
 }
-
 
