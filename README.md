@@ -2,9 +2,7 @@
 
 > **Your device's silent guardian. No cloud. No nonsense.**
 
-Trust Sentinel answers one question every **30 seconds**:
-
-Unlike traditional antivirus software, Trust Sentinel continuously monitors (locally) your system's trust and integrity, detects suspicious changes, automatically repairs common security issues, and helps protect your device from network-based attacks — all while remaining completely offline.
+Trust Sentinel is a lightweight Windows guardian (smoke detector). Just download, double-click and always protected. It auto-detects DNS hijacking, ARP spoofing, rogue WiFi, phishing domains, ransomware, and USB threats then repairs them automatically. Sets stealth mode on public networks. Updates itself weekly. Zero cloud, Zero network, Zero telemetry and Zero AI. All run locally with < ~30MB RAM & 1% CPU usage and everything stays on your PC. Free. Open source.
 
 ---
 
