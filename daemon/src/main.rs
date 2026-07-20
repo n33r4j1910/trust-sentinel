@@ -190,19 +190,7 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
     for entry in &current_startup {
         if !trusted.contains(entry) && entry != "None" {
             let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output();
-            let _ = fs::remove_file(format!("{}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{}", std::env::var("APPDATA").unwrap_or_default(), entry));
             fixed.push(format!("auto_repair: Removed unknown startup: {}", entry));
-        }
-    }
-    let ports = get_ports();
-    for port_binding in &ports {
-        if let Some(port) = port_binding.split(':').last() {
-            if let Ok(p) = port.parse::<u16>() {
-                if p != HTTP_PORT && p != 445 && p != 135 && p != 139 && p < 49152 {
-                    let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("New-NetFirewallRule -DisplayName 'TS-Block-Port-{}' -Direction Inbound -LocalPort {} -Action Block", p, p)]).output();
-                    fixed.push(format!("auto_repair: Blocked new port {}", p));
-                }
-            }
         }
     }
     fixed
@@ -268,6 +256,8 @@ fn setup_startup() {
         let _ = Command::new("powershell").args(["-NoProfile","-Command","$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut($env:APPDATA + '\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\TrustSentinel.lnk'); $sc.TargetPath = 'wscript.exe'; $sc.Arguments = $env:ProgramData + '\\Trust Sentinel\\start_silent.vbs'; $sc.WindowStyle = 7; $sc.Save()"]).output();
     }
 }
+
+
 
 
 
