@@ -15,7 +15,7 @@ use sha2::Sha256;
 type HmacSha256 = Hmac<Sha256>;
 
 const HTTP_PORT: u16 = 12789;
-const SCAN_THRESHOLD: usize = 15;
+const SCAN_THRESHOLD: usize = 50;
 const DATA_DIR: &str = "C:\\ProgramData\\Trust Sentinel";
 const HOSTS_BACKUP: &str = "C:\\ProgramData\\Trust Sentinel\\hosts.backup";
 
