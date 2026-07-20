@@ -4,9 +4,7 @@
 
 Trust Sentinel answers one question every **30 seconds**:
 
-> **"Can this device still be trusted right now?"**
-
-Unlike traditional antivirus software, Trust Sentinel continuously monitors your system's trust and integrity, detects suspicious changes, automatically repairs common security issues, and helps protect your device from network-based attacks—all while remaining completely offline.
+Unlike traditional antivirus software, Trust Sentinel continuously monitors (locally) your system's trust and integrity, detects suspicious changes, automatically repairs common security issues, and helps protect your device from network-based attacks — all while remaining completely offline.
 
 ---
 
@@ -21,6 +19,7 @@ Think of it as a **smoke alarm for your computer**.
 - ✅ Detects security changes instantly
 - ✅ Automatically repairs common threats
 - ✅ Completely offline
+- ✅ Tested: 64/69 VirusTotal clean, 0/100 CAPE sandbox score
 
 It is **not** an antivirus or EDR.
 
@@ -50,7 +49,7 @@ But who watches for things like:
 
 **Trust Sentinel does.**
 
-It detects these attacks immediately—and whenever possible, repairs them automatically.
+It detects these attacks immediately — and whenever possible, repairs them automatically.
 
 ---
 
@@ -72,7 +71,7 @@ Monitored items include:
 
 Every few minutes, the baseline is verified.
 
-If something changes unexpectedly—you'll know.
+If something changes unexpectedly — you'll know.
 
 ---
 
@@ -80,12 +79,14 @@ If something changes unexpectedly—you'll know.
 
 Trust Sentinel detects active attacks including:
 
-- 🔍 Port scans
-- 🌐 ARP spoofing (MITM)
-- 📶 Rogue / Evil Twin Wi-Fi
-- 🎣 Phishing domains (80,000+ blacklist)
-- 🔐 Ransomware (Canary file monitoring)
-- 💾 USB storage insertion
+- 🔍 Port scans → auto-blocks attacker IP
+- 🌐 ARP spoofing (MITM) → flushes ARP cache
+- 📶 Rogue / Evil Twin Wi-Fi → auto-enables stealth
+- 🎣 Phishing domains (80,000+ blacklist) → clears DNS cache
+- 🔐 Ransomware (Canary file monitoring) → disables network
+- 💾 USB storage insertion → auto-ejects device
+- 🔑 Unknown startup entries → auto-removes
+- 🔌 New listening ports → auto-blocks
 
 ---
 
@@ -100,6 +101,11 @@ When possible, Trust Sentinel repairs security issues automatically.
 | Firewall disabled | Re-enable Firewall |
 | ARP poisoning | Flush ARP cache |
 | DNS cache poisoning | Clear DNS cache |
+| Port scanning | Block attacker IP via Firewall |
+| Unknown startup | Remove from registry/startup |
+| New listening port | Block via Firewall |
+| USB storage inserted | Auto-eject device |
+| Ransomware detected | Disable network adapter |
 
 ---
 
@@ -122,6 +128,8 @@ Perfect for:
 - Conferences
 - Public Wi-Fi
 
+**Auto-Stealth:** Set your home WiFi once. Every other network gets stealth automatically.
+
 ---
 
 ## 💚 System Tray Status
@@ -131,9 +139,9 @@ Trust Sentinel always stays in your system tray.
 | Status | Meaning |
 |---------|---------|
 | 🟢 **Trusted** | Everything is healthy |
-| 🟡 **Warning** | A change requires attention |
-| 🔴 **Compromised** | Active attack or multiple issues |
-| 🥷 **Stealth** | Device hidden from network |
+| 🟡 **Warning** | A change requires attention — popup + browser opens |
+| 🔴 **Compromised** | Active attack or multiple issues — popup + browser opens |
+| 🟠 **Stealth** | Device hidden from network |
 
 Hover over the icon to view detected issues and recommended actions.
 
@@ -141,7 +149,7 @@ Hover over the icon to view detected issues and recommended actions.
 
 # ❌ What Trust Sentinel Doesn't Do
 
-Trust Sentinel intentionally focuses on system trust—not malware scanning.
+Trust Sentinel intentionally focuses on system trust — not malware scanning.
 
 It does **not**:
 
@@ -169,10 +177,11 @@ You need all three.
 
 1. Download the latest release.
 2. Extract `TrustSentinel.zip`.
-3. Run `TrustSentinel.exe`.
-4. Allow Administrator permissions (recommended).
+3. Run `start_silent.vbs` (silent) or `trust-sentinel-daemon.exe` (visible).
+4. Allow Administrator permissions (recommended for auto-repair).
 5. Let Trust Sentinel create your trusted baseline.
-6. Continue using your PC normally.
+6. Set your home WiFi: `POST http://127.0.0.1:12789/home`
+7. Continue using your PC normally.
 
 ---
 
@@ -183,7 +192,7 @@ You need all three.
 | 🟢 **Trusted** | No unauthorized changes detected |
 | 🟡 **Warning** | One suspicious change detected |
 | 🔴 **Compromised** | Multiple changes or attack in progress |
-| 🥷 **Stealth** | Device hidden from network |
+| 🟠 **Stealth** | Device hidden from network |
 
 ---
 
@@ -193,9 +202,9 @@ You need all three.
 |----------|----------|
 | **Integrity Monitoring** | DNS, Hosts file, Startup Programs, Listening Ports, Firewall, ARP Table, Wi-Fi SSID |
 | **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware Canaries, USB Storage, Evil Twin Wi-Fi |
-| **Automatic Repair** | Hosts Restore, DNS Reset, Firewall Recovery, ARP Flush, DNS Cache Clear |
-| **Stealth Mode** | Block Incoming Connections, Disable Discovery, Stop File Sharing |
-| **User Experience** | System Tray, Rich Tooltips, Baseline Reset, One-Click Repair |
+| **Automatic Repair** | Hosts Restore, DNS Reset, Firewall Recovery, ARP Flush, DNS Cache Clear, Port Blocking, Startup Removal, USB Eject, Network Kill |
+| **Stealth Mode** | Block Incoming Connections, Disable Discovery, Stop File Sharing, Auto-Stealth on New WiFi |
+| **User Experience** | System Tray (Green/Yellow/Red/Orange), Rich Tooltips, Popup Alerts, Baseline Reset, One-Click Repair |
 | **Privacy** | Fully Offline, No Accounts, No Telemetry, Localhost Only |
 
 ---
@@ -224,13 +233,14 @@ Runs comfortably on older laptops without affecting performance.
 | DNS Poisoning | ❌ | ❌ | ✅ Auto Repair |
 | ARP Spoofing | ❌ | ❌ | ✅ Auto Repair |
 | Firewall Disabled | ❌ | ❌ | ✅ Auto Repair |
-| Port Scan Detection | ❌ | ❌ | ✅ |
-| Ransomware Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection |
-| Phishing Domains | ❌ | ❌ | ✅ 80K+ Database |
-| USB Storage Detection | ❌ | ❌ | ✅ |
-| Startup Persistence | ⚠️ Partial | ❌ | ✅ |
-| Evil Twin Wi-Fi | ❌ | ❌ | ✅ |
+| Port Scan Detection | ❌ | ❌ | ✅ Auto Block |
+| Ransomware Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection + Network Kill |
+| Phishing Domains | ❌ | ❌ | ✅ 80K+ Database + DNS Clear |
+| USB Storage Detection | ❌ | ❌ | ✅ Auto Eject |
+| Startup Persistence | ⚠️ Partial | ❌ | ✅ Auto Remove |
+| Evil Twin Wi-Fi | ❌ | ❌ | ✅ Auto Stealth |
 | Stealth Mode | ❌ | ❌ | ✅ |
+| New Listening Ports | ❌ | ❌ | ✅ Auto Block |
 
 ---
 
@@ -254,12 +264,26 @@ Trust Sentinel was designed around one principle:
 
 ---
 
+# 🧪 Security Testing
+
+Trust Sentinel has been tested through multiple sandbox environments:
+
+| Test | Result |
+|------|--------|
+| VirusTotal (69 engines) | **64/69 Clean (93%)** — 5 false positives from unsigned binary |
+| CAPE Sandbox | **0/100 Malicious Score** — All behaviors by design |
+| Sigma Rules | **6 matches** — All from expected PowerShell monitoring |
+
+[View full results](https://github.com/n33r4j1910/trust-sentinel)
+
+---
+
 # ⚠️ Current Limitations
 
 - Hosts file repair requires Administrator privileges.
 - Some system checks currently rely on PowerShell (native Windows API migration is underway).
 - Credential Guard currently detects file **writes**, not **reads**.
-- Read detection requires Windows Audit Policies.
+- Auto-repair pauses during Stealth Mode to prevent firewall conflicts.
 - User-context features (USB monitoring and credential monitoring) work best when running under the logged-in user account.
 
 ---
@@ -272,18 +296,14 @@ Future improvements include:
 - TPM-backed hardware trust verification
 - Secure Boot verification
 - BitLocker health monitoring
-- Secure process monitoring
-- Driver integrity verification
-- Certificate trust monitoring
-- Plugin architecture
+- VPN drop detection
 - Linux support
 - macOS support
+- Code signing via SignPath.io
 
 ---
 
 # 🏷️ Keywords
-
-```
 endpoint-security
 trust-agent
 device-integrity
@@ -293,17 +313,18 @@ privacy-first
 windows-security
 intrusion-detection
 self-healing
+auto-repair
 ransomware
 phishing
 port-scan
 arp-spoofing
-hardware-rooted-trust
+stealth-mode
 tpm-2.0
 rust
 lightweight
 no-cloud
 open-source
-```
+
 
 ---
 
