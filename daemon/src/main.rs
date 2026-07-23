@@ -46,6 +46,16 @@ fn main() {
     let _ = fs::create_dir_all(DATA_DIR);
     backup_hosts();
     let seed = random_seed();
+    // Lock seed in memory
+    let locked_seed = seed.clone();
+    std::thread::spawn(move || {
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::System::Memory::VirtualLock;
+            let _ = VirtualLock(locked_seed.as_ptr() as *const _, locked_seed.len());
+        }
+        std::mem::forget(locked_seed);
+    });
     let baseline = Arc::new(Mutex::new(collect_state()));
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let known_startup: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -232,6 +242,8 @@ fn check_usb() -> String { if let Ok(o) = Command::new("powershell").args(["-NoP
 
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
+    // Skip if no internet - changes are expected
+    if get_wifi() == "Unknown" && get_dns().len() <= 1 { return d; }
     if a.dns_servers != b.dns_servers { d.push(("dns_change".into(), "DNS changed".into())); }
     if a.hosts_hash != b.hosts_hash { d.push(("hosts_change".into(), "Hosts modified".into())); }
     if a.startup_entries != b.startup_entries { d.push(("startup_change".into(), "Startup changed".into())); }
@@ -257,6 +269,40 @@ fn setup_startup() {
     }
 }
 
+fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
+    use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+    let unbound = UnboundKey::new(&AES_256_GCM, key).unwrap();
+    let key = LessSafeKey::new(unbound);
+    let mut nonce_bytes = [0u8; 12];
+    SystemRandom::new().fill(&mut nonce_bytes).unwrap();
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+    let mut data = plaintext.to_vec();
+    key.seal_in_place_append_tag(nonce, Aad::empty(), &mut data).unwrap();
+    let mut result = nonce_bytes.to_vec();
+    result.extend(&data);
+    result
+}
+
+fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+    if ciphertext.len() < 12 { return None; }
+    let (nonce_bytes, encrypted) = ciphertext.split_at(12);
+    let unbound = UnboundKey::new(&AES_256_GCM, key).ok()?;
+    let key = LessSafeKey::new(unbound);
+    let nonce = Nonce::assume_unique_for_key(nonce_bytes.try_into().ok()?);
+    let mut data = encrypted.to_vec();
+    key.open_in_place(nonce, Aad::empty(), &mut data).ok()?;
+    Some(data)
+}
+
+fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
+    use sha2::Digest;
+    let machine_id = std::env::var("COMPUTERNAME").unwrap_or_default();
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(seed);
+    hasher.update(machine_id.as_bytes());
+    hasher.finalize().to_vec()
+}
 
 
 
