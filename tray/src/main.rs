@@ -84,11 +84,11 @@ fn main() {
                 tray.set_tooltip(Some(tooltip)).ok();
 
                 // Show popup + open browser on Warning or Compromised
-                if (status.trust_state == "Warning" || status.trust_state == "Compromised") && last_state != status.trust_state {
+                                if (status.trust_state == "Warning" || status.trust_state == "Compromised") && last_state != status.trust_state {
                     let msg = if status.trust_state == "Warning" {
-                        "Trust Sentinel: Warning - Something changed on your system. Opening details..."
+                        "Trust Sentinel: Warning - Changes detected! Opening details..."
                     } else {
-                        "Trust Sentinel: COMPROMISED! Multiple threats detected. Opening repair panel..."
+                        "Trust Sentinel: COMPROMISED! Opening repair panel..."
                     };
                     let _ = Cmd::new("powershell")
                         .args(["-NoProfile", "-Command", 

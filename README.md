@@ -4,7 +4,7 @@
 
 > **Your device's silent guardian. No cloud. No nonsense.**
 
-Trust Sentinel is a lightweight Windows guardian (smoke detector). Just download, double-click and always protected. It auto-detects DNS hijacking, ARP spoofing, rogue WiFi, phishing domains, ransomware, and USB threats then repairs them automatically. Sets stealth mode on public networks. Updates itself weekly. Zero cloud, Zero network, Zero telemetry and Zero AI. All run locally with < ~30MB RAM & 1% CPU usage and everything stays on your PC. Free. Open source.
+Trust Sentinel is a lightweight Windows guardian (smoke detector). Just download, double-click and always protected. It auto-detects DNS hijacking, ARP spoofing, rogue WiFi, phishing domains, Ransomware canary early, and USB threats then repairs them automatically. Sets stealth mode on public networks. Updates itself weekly. Zero cloud, Minimal network (phishing blocklist only), Zero telemetry and Zero AI. All run locally with < ~30MB RAM & 1% CPU usage and everything stays on your PC. Free. Open source.
 
 ---
 
@@ -43,7 +43,7 @@ But who watches for things like:
 - Active port scanning?
 - ARP spoofing?
 - Rogue Wi-Fi hotspots?
-- Ransomware encryption?
+- Ransomware canary early warning encryption?
 - Firewall being disabled?
 - Phishing domains already cached on your PC?
 
@@ -81,9 +81,9 @@ Trust Sentinel detects active attacks including:
 
 - 🔍 Port scans → auto-blocks attacker IP
 - 🌐 ARP spoofing (MITM) → flushes ARP cache
-- 📶 Rogue / Evil Twin Wi-Fi → auto-enables stealth
+- 📶 Rogue / Wi-Fi network change detection → auto-enables stealth
 - 🎣 Phishing domains (80,000+ blacklist) → clears DNS cache
-- 🔐 Ransomware (Canary file monitoring) → disables network
+- 🔐 Ransomware canary early warning → disables network
 - 💾 USB storage insertion → auto-ejects device
 - 🔑 Unknown startup entries → auto-removes
 - 🔌 New listening ports → auto-blocks
@@ -105,7 +105,7 @@ When possible, Trust Sentinel repairs security issues automatically.
 | Unknown startup | Remove from registry/startup |
 | New listening port | Block via Firewall |
 | USB storage inserted | Auto-eject device |
-| Ransomware detected | Disable network adapter |
+| Ransomware canary early warning detected | Disable network adapter |
 
 ---
 
@@ -201,7 +201,7 @@ You need all three.
 | Category | Features |
 |----------|----------|
 | **Integrity Monitoring** | DNS, Hosts file, Startup Programs, Listening Ports, Firewall, ARP Table, Wi-Fi SSID |
-| **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware Canaries, USB Storage, Evil Twin Wi-Fi |
+| **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware canary early warning, USB Storage, Wi-Fi network change detection |
 | **Automatic Repair** | Hosts Restore, DNS Reset, Firewall Recovery, ARP Flush, DNS Cache Clear, Port Blocking, Startup Removal, USB Eject, Network Kill |
 | **Stealth Mode** | Block Incoming Connections, Disable Discovery, Stop File Sharing, Auto-Stealth on New WiFi |
 | **User Experience** | System Tray (Green/Yellow/Red/Orange), Rich Tooltips, Popup Alerts, Baseline Reset, One-Click Repair |
@@ -234,11 +234,11 @@ Runs comfortably on older laptops without affecting performance.
 | ARP Spoofing | ❌ | ❌ | ✅ Auto Repair |
 | Firewall Disabled | ❌ | ❌ | ✅ Auto Repair |
 | Port Scan Detection | ❌ | ❌ | ✅ Auto Block |
-| Ransomware Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection + Network Kill |
+| Ransomware canary early warning Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection + Network Kill |
 | Phishing Domains | ❌ | ❌ | ✅ 80K+ Database + DNS Clear |
 | USB Storage Detection | ❌ | ❌ | ✅ Auto Eject |
 | Startup Persistence | ⚠️ Partial | ❌ | ✅ Auto Remove |
-| Evil Twin Wi-Fi | ❌ | ❌ | ✅ Auto Stealth |
+| Wi-Fi network change detection | ❌ | ❌ | ✅ Auto Stealth |
 | Stealth Mode | ❌ | ❌ | ✅ |
 | New Listening Ports | ❌ | ❌ | ✅ Auto Block |
 
@@ -314,7 +314,7 @@ windows-security
 intrusion-detection
 self-healing
 auto-repair
-ransomware
+Ransomware canary early warning
 phishing
 port-scan
 arp-spoofing

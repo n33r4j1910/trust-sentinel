@@ -70,6 +70,7 @@ fn main() {
                 let mut buf = [0u8; 4096];
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
+                if req.contains("POST") && !req.contains(&format!("token={}", token_str(&s1))) { let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n"); continue; }
 
                 if req.contains("POST /home") {
                     let ssid = get_wifi();
@@ -97,7 +98,7 @@ fn main() {
                 if stealth_flag.exists() {
                     let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth mode active - device hidden".into()] };
                     let json = serde_json::to_string(&st).unwrap();
-                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\\r\\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
                     continue;
                 }
 
@@ -119,7 +120,7 @@ fn main() {
                 all.extend(extra);
                 let st = DaemonStatus { trust_state: state.into(), token, last_check: Utc::now().to_rfc3339(), latest_events: all };
                 let json = serde_json::to_string(&st).unwrap();
-                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\\r\\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
             }
         }
     });
@@ -140,8 +141,10 @@ fn main() {
         }
     });
 
-    // Auto-stealth: default ON, off only on home WiFi
+        // Auto-stealth: default ON, off only on home WiFi
     let e_stealth = events.clone();
+    let b_auto = baseline.clone();
+    let e_auto = events.clone();
     std::thread::spawn(move || {
         let home_file = std::path::PathBuf::from(DATA_DIR).join("home_wifi.txt");
         stealth_on();
@@ -153,13 +156,31 @@ fn main() {
                 if !home.is_empty() && current == home {
                     stealth_off();
                 } else if !home.is_empty() && current != home && current != "Unknown" {
+                    // Auto-reset baseline on WiFi change
+                    let cur = collect_state();
+                    if let Ok(mut bl) = b_auto.lock() { *bl = cur; }
+                    if let Ok(mut ev) = e_auto.lock() { ev.clear(); }
                     stealth_on();
                 }
             }
         }
     });
 
-    let e_scan = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(10)); let intruder = detect_port_scan(); if !intruder.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("New-NetFirewallRule -DisplayName 'TS-Block-{}' -Direction Inbound -RemoteAddress '{}' -Action Block", intruder, intruder)]).output(); let mut ev = e_scan.lock().unwrap(); ev.push(format!("auto_block: {} blocked", intruder)); } });
+        let e_scan = events.clone();
+    std::thread::spawn(move || {
+        let mut blocked_ips: HashSet<String> = HashSet::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(10));
+            let intruder = detect_port_scan();
+            if !intruder.is_empty() && !blocked_ips.contains(&intruder) {
+                blocked_ips.insert(intruder.clone());
+                let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("Get-NetFirewallRule -DisplayName 'TS-Block-{}' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object {{}}; if (-not $?) {{ New-NetFirewallRule -DisplayName 'TS-Block-{}' -Direction Inbound -RemoteAddress '{}' -Action Block }}", intruder, intruder, intruder)]).output();
+                let mut ev = e_scan.lock().unwrap();
+                ev.push(format!("auto_block: {} blocked", intruder));
+            }
+            if blocked_ips.len() > 50 { blocked_ips.clear(); }
+        }
+    });
     let e_usb = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false", usb)]).output(); let mut ev = e_usb.lock().unwrap(); ev.push(format!("auto_eject: {} disabled", usb)); } });
     let e_ransom = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let _ = Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output(); let mut ev = e_ransom.lock().unwrap(); ev.push("auto_kill: Network disabled - ransomware detected!".into()); } });
     let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
@@ -186,21 +207,31 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
     let mut fixed = Vec::new();
     if let Ok(orig) = fs::read_to_string(HOSTS_BACKUP) {
         let cur = fs::read_to_string("C:\\Windows\\System32\\drivers\\etc\\hosts").unwrap_or_default();
-        if orig != cur { let _ = fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig); fixed.push("auto_repair: Hosts restored".into()); }
+        if orig != cur { 
+            if fs::write("C:\\Windows\\System32\\drivers\\etc\\hosts", &orig).is_ok() {
+                fixed.push("auto_repair: Hosts restored".into());
+            }
+        }
     }
-    let _ = Command::new("ipconfig").args(["/flushdns"]).output();
-    let _ = Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output();
-    fixed.push("auto_repair: DNS reset".into());
-    let _ = Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output();
-    fixed.push("auto_repair: Firewall re-enabled".into());
-    let _ = Command::new("arp").args(["-d"]).output();
-    fixed.push("auto_repair: ARP flushed".into());
+    if Command::new("ipconfig").args(["/flushdns"]).output().is_ok() {
+        fixed.push("auto_repair: DNS reset".into());
+    }
+    if Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output().is_ok() {
+        fixed.push("auto_repair: DNS set to DHCP".into());
+    }
+    if Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output().is_ok() {
+        fixed.push("auto_repair: Firewall re-enabled".into());
+    }
+    if Command::new("arp").args(["-d"]).output().is_ok() {
+        fixed.push("auto_repair: ARP flushed".into());
+    }
     let current_startup: HashSet<String> = get_startup().into_iter().collect();
     let trusted = known_startup.lock().unwrap();
     for entry in &current_startup {
         if !trusted.contains(entry) && entry != "None" {
-            let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output();
-            fixed.push(format!("auto_repair: Removed unknown startup: {}", entry));
+            if Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output().is_ok() {
+                fixed.push(format!("auto_repair: Removed startup: {}", entry));
+            }
         }
     }
     fixed
@@ -303,6 +334,7 @@ fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     hasher.update(machine_id.as_bytes());
     hasher.finalize().to_vec()
 }
+
 
 
 
