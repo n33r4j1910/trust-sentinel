@@ -98,7 +98,7 @@ fn main() {
                 if stealth_flag.exists() {
                     let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth mode active - device hidden".into()] };
                     let json = serde_json::to_string(&st).unwrap();
-                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\\r\\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
                     continue;
                 }
 
@@ -120,7 +120,7 @@ fn main() {
                 all.extend(extra);
                 let st = DaemonStatus { trust_state: state.into(), token, last_check: Utc::now().to_rfc3339(), latest_events: all };
                 let json = serde_json::to_string(&st).unwrap();
-                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\\r\\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
             }
         }
     });
@@ -213,23 +213,23 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
             }
         }
     }
-    if Command::new("ipconfig").args(["/flushdns"]).output().is_ok() {
+    if Command::new("ipconfig").args(["/flushdns"]).output().map(|o| o.status.success()).unwrap_or(false) {
         fixed.push("auto_repair: DNS reset".into());
     }
-    if Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output().is_ok() {
+    if Command::new("netsh").args(["interface", "ip", "set", "dns", "Wi-Fi", "dhcp"]).output().map(|o| o.status.success()).unwrap_or(false) {
         fixed.push("auto_repair: DNS set to DHCP".into());
     }
-    if Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output().is_ok() {
+    if Command::new("powershell").args(["-NoProfile","-Command","Set-NetFirewallProfile -All -Enabled True"]).output().map(|o| o.status.success()).unwrap_or(false) {
         fixed.push("auto_repair: Firewall re-enabled".into());
     }
-    if Command::new("arp").args(["-d"]).output().is_ok() {
+    if Command::new("arp").args(["-d"]).output().map(|o| o.status.success()).unwrap_or(false) {
         fixed.push("auto_repair: ARP flushed".into());
     }
     let current_startup: HashSet<String> = get_startup().into_iter().collect();
     let trusted = known_startup.lock().unwrap();
     for entry in &current_startup {
         if !trusted.contains(entry) && entry != "None" {
-            if Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output().is_ok() {
+            if Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output().map(|o| o.status.success()).unwrap_or(false) {
                 fixed.push(format!("auto_repair: Removed startup: {}", entry));
             }
         }
@@ -334,6 +334,8 @@ fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     hasher.update(machine_id.as_bytes());
     hasher.finalize().to_vec()
 }
+
+
 
 
 

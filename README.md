@@ -180,7 +180,7 @@ You need all three.
 3. Run `start_silent.vbs` (silent) or `trust-sentinel-daemon.exe` (visible).
 4. Allow Administrator permissions (recommended for auto-repair).
 5. Let Trust Sentinel create your trusted baseline.
-6. Set your home WiFi: `POST http://127.0.0.1:12789/home`
+6. Set your home WiFi: `GET http://127.0.0.1:12789 for token, then POST /home?token=<token>`
 7. Continue using your PC normally.
 
 ---
@@ -333,3 +333,4 @@ open-source
 Licensed under the **MIT License**.
 
 © 2026 Trust Sentinel
+
