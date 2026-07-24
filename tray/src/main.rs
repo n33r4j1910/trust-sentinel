@@ -84,7 +84,7 @@ fn main() {
                 tray.set_tooltip(Some(tooltip)).ok();
 
                 // Show popup + open browser on Warning or Compromised
-                                if (status.trust_state == "Warning" || status.trust_state == "Compromised") && last_state != status.trust_state {
+                                                                if (status.trust_state == "Warning" || status.trust_state == "Compromised") && last_state != status.trust_state  {
                     let msg = if status.trust_state == "Warning" {
                         "Trust Sentinel: Warning - Changes detected! Opening details..."
                     } else {
@@ -95,7 +95,7 @@ fn main() {
                             &format!("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Warning; $n.Visible = $true; $n.ShowBalloonTip(10000, 'Trust Sentinel', '{}', 'Warning'); Start-Sleep 10; $n.Dispose()", msg)
                         ])
                         .spawn();
-                    let _ = Cmd::new("cmd").args(["/c", "start", "http://127.0.0.1:12789"]).spawn();
+                    let _ = Cmd::new("cmd").args(["/c", "start", "http://127.0.0.1:12789/dashboard"]).spawn();
                 }
                 last_state = status.trust_state;
             }

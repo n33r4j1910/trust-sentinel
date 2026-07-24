@@ -11,6 +11,7 @@ use hmac::{Hmac, Mac};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use base64::Engine;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -30,6 +31,12 @@ struct SystemState {
     firewall_profiles: Vec<String>,
     arp_table: Vec<String>,
     wifi_ssid: String,
+    scheduled_tasks: Vec<String>,
+    proxy_settings: Vec<String>,
+    root_cas: Vec<String>,
+    defender_status: String,
+    services_list: Vec<String>,
+    network_devices: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -58,10 +65,13 @@ fn main() {
     });
     let baseline = Arc::new(Mutex::new(collect_state()));
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Start watchdog
+    let wd_events = events.clone();
+    std::thread::spawn(move || watchdog_heartbeat(&wd_events));
     let known_startup: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     for entry in get_startup() { known_startup.lock().unwrap().insert(entry); }
 
-    let b1 = baseline.clone(); let e1 = events.clone(); let s1 = seed.clone();
+            let b1 = baseline.clone(); let e1 = events.clone(); let s1 = seed.clone(); let k_http = known_startup.clone();
     std::thread::spawn(move || {
         let listener = TcpListener::bind(("127.0.0.1", HTTP_PORT)).unwrap();
         println!("Trust Sentinel on http://127.0.0.1:{}", HTTP_PORT);
@@ -71,6 +81,12 @@ fn main() {
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
                 if req.contains("POST") && !req.contains(&format!("token={}", token_str(&s1))) { let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n"); continue; }
+
+                if req.contains("GET /dashboard") {
+                    let html = include_str!("web/settings.html");
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}", html.len(), html).as_bytes());
+                    continue;
+                }
 
                 if req.contains("POST /home") {
                     let ssid = get_wifi();
@@ -92,7 +108,14 @@ fn main() {
                 }
                 if req.contains("POST /stealth") { stealth_on(); let st = DaemonStatus { trust_state: "Stealth".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth ON".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
                 if req.contains("POST /visible") { stealth_off(); let st = DaemonStatus { trust_state: "Visible".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: vec!["Stealth OFF".into()] }; let json = serde_json::to_string(&st).unwrap(); let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes()); continue; }
-                
+
+                                if req.contains("POST /repair") { 
+                    let fixed = auto_repair(&k_http);
+                    let st = DaemonStatus { trust_state: "Trusted".into(), token: token_str(&s1), last_check: Utc::now().to_rfc3339(), latest_events: fixed };
+                    let json = serde_json::to_string(&st).unwrap();
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    continue;
+                }
 
                 let stealth_flag = std::path::PathBuf::from(DATA_DIR).join("stealth.flag");
                 if stealth_flag.exists() {
@@ -181,8 +204,8 @@ fn main() {
             if blocked_ips.len() > 50 { blocked_ips.clear(); }
         }
     });
-    let e_usb = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { let _ = Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false", usb)]).output(); let mut ev = e_usb.lock().unwrap(); ev.push(format!("auto_eject: {} disabled", usb)); } });
-    let e_ransom = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { let _ = Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output(); let mut ev = e_ransom.lock().unwrap(); ev.push("auto_kill: Network disabled - ransomware detected!".into()); } });
+        let e_usb = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); let usb = check_usb(); if !usb.is_empty() { if Command::new("powershell").args(["-NoProfile","-Command",&format!("$d = Get-PnpDevice | Where-Object {{$_.FriendlyName -eq '{}'}}; if($d) {{ Disable-PnpDevice -InstanceId $d.InstanceId -Confirm:$false }}", usb)]).output().map(|o| o.status.success()).unwrap_or(false) { let mut ev = e_usb.lock().unwrap(); ev.push(format!("auto_eject: {} disabled", usb)); } } });
+        let e_ransom = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(30)); if check_ransomware() { if Command::new("powershell").args(["-NoProfile","-Command","Get-NetAdapter | Disable-NetAdapter -Confirm:$false"]).output().map(|o| o.status.success()).unwrap_or(false) { let mut ev = e_ransom.lock().unwrap(); ev.push("auto_kill: Network disabled - ransomware detected!".into()); } } });
     let e3 = events.clone(); std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(120)); if !check_phishing().is_empty() { clear_dns(); let mut ev = e3.lock().unwrap(); ev.push("auto_repair: DNS cache cleared".into()); } });
         // Weekly phishing blocklist refresh
     let e_phish = events.clone();
@@ -199,7 +222,7 @@ fn main() {
 
 fn random_seed() -> Vec<u8> { let r = SystemRandom::new(); let mut s = [0u8; 32]; r.fill(&mut s).unwrap(); s.to_vec() }
 fn token_str(seed: &[u8]) -> String { let c = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() / 30; let mut m = HmacSha256::new_from_slice(seed).unwrap(); m.update(&c.to_be_bytes()); hex::encode(m.finalize().into_bytes()) }
-fn collect_state() -> SystemState { SystemState { dns_servers: get_dns(), hosts_hash: get_hosts_hash(), startup_entries: get_startup(), listening_ports: get_ports(), firewall_profiles: get_firewall(), arp_table: get_arp(), wifi_ssid: get_wifi() } }
+fn collect_state() -> SystemState { SystemState { dns_servers: get_dns(), hosts_hash: get_hosts_hash(), startup_entries: get_startup(), listening_ports: get_ports(), firewall_profiles: get_firewall(), arp_table: get_arp(), wifi_ssid: get_wifi(), scheduled_tasks: get_scheduled_tasks(), proxy_settings: get_proxy(), root_cas: get_root_cas(), defender_status: get_defender_status(), services_list: get_services(), network_devices: get_network_devices() } }
 
 fn backup_hosts() { let _ = fs::copy("C:\\Windows\\System32\\drivers\\etc\\hosts", HOSTS_BACKUP); }
 
@@ -271,9 +294,60 @@ fn check_phishing() -> String { let hosts_path = std::path::PathBuf::from(DATA_D
 fn check_ransomware() -> bool { let canary_dir = std::path::PathBuf::from(DATA_DIR).join("canary"); let _ = fs::create_dir_all(&canary_dir); let canary_files = ["test.docx", "test.pdf", "test.jpg", "test.txt", "test.xlsx"]; let mut modified = 0; for fname in &canary_files { let p = canary_dir.join(fname); if !p.exists() { let _ = fs::write(&p, b"TRUST SENTINEL CANARY"); } if let Ok(meta) = fs::metadata(&p) { if let Ok(mt) = meta.modified() { if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 30 { modified += 1; } } } } } modified >= 2 }
 fn check_usb() -> String { if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'OK' -and $_.FriendlyName -match 'storage|flash|drive'} | Select-Object -ExpandProperty FriendlyName"]).output() { let s = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !s.is_empty() { return s; } } String::new() }
 
+fn get_scheduled_tasks() -> Vec<String> {
+    let mut t = Vec::new();
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-ScheduledTask | Where-Object {$_.State -ne 'Disabled'} | Select-Object -ExpandProperty TaskName | Sort-Object"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { t.push(l); } }
+    }
+    if t.is_empty() { t.push("None".into()); }
+    t
+}
+fn get_proxy() -> Vec<String> {
+    let mut p = Vec::new();
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","$ie = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings').ProxyServer; $winhttp = netsh winhttp show proxy | Select-String 'Proxy Server'; Write-Output ('IE:' + $ie + '|WinHTTP:' + $winhttp)"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { p.push(l); } }
+    }
+    if p.is_empty() { p.push("None".into()); }
+    p
+}
+fn get_root_cas() -> Vec<String> {
+    let mut c = Vec::new();
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-ChildItem Cert:\\\\LocalMachine\\\\Root, Cert:\\\\CurrentUser\\\\Root | Select-Object -ExpandProperty Subject | Sort-Object"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { c.push(l); } }
+    }
+    if c.is_empty() { c.push("None".into()); }
+    c
+}
+fn get_defender_status() -> String {
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-MpComputerStatus | Select-Object -ExpandProperty RealTimeProtectionEnabled"]).output() {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if s == "True" { return "ON".into(); }
+        if s == "False" { return "OFF".into(); }
+    }
+    "Unknown".into()
+}
+fn get_services() -> Vec<String> {
+    let mut s = Vec::new();
+    if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-Service | Where-Object {$_.Status -eq 'Running' -and $_.StartType -eq 'Automatic'} | Select-Object -ExpandProperty Name | Sort-Object"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() { let l = l.trim().to_string(); if !l.is_empty() { s.push(l); } }
+    }
+    if s.is_empty() { s.push("None".into()); }
+    s
+}
+fn get_network_devices() -> Vec<String> {
+    let mut d = Vec::new();
+    if let Ok(o) = Command::new("arp").args(["-a"]).output() {
+        for l in String::from_utf8_lossy(&o.stdout).lines() {
+            let l = l.trim().to_string();
+            if l.contains("dynamic") { if let Some(ip) = l.split_whitespace().next() { d.push(ip.to_string()); } }
+        }
+    }
+    if d.is_empty() { d.push("None".into()); }
+    d
+}
+
 fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     let mut d = Vec::new();
-    // Skip if no internet - changes are expected
     if get_wifi() == "Unknown" && get_dns().len() <= 1 { return d; }
     if a.dns_servers != b.dns_servers { d.push(("dns_change".into(), "DNS changed".into())); }
     if a.hosts_hash != b.hosts_hash { d.push(("hosts_change".into(), "Hosts modified".into())); }
@@ -282,14 +356,40 @@ fn diff(a: &SystemState, b: &SystemState) -> Vec<(String, String)> {
     if a.firewall_profiles != b.firewall_profiles { d.push(("firewall_change".into(), "Firewall changed".into())); }
     if a.arp_table != b.arp_table { d.push(("arp_change".into(), "ARP changed".into())); }
     if a.wifi_ssid != b.wifi_ssid { d.push(("wifi_change".into(), format!("WiFi: {}", b.wifi_ssid))); }
+    if a.scheduled_tasks != b.scheduled_tasks { d.push(("task_change".into(), "Scheduled tasks changed".into())); }
+    if a.proxy_settings != b.proxy_settings { d.push(("proxy_change".into(), "Proxy changed - possible MITM!".into())); }
+    if a.root_cas != b.root_cas { d.push(("rootca_change".into(), "Root CA added - HTTPS interception!".into())); }
+    if a.defender_status != b.defender_status { d.push(("defender_change".into(), format!("Defender: {}", b.defender_status))); }
+    if a.services_list != b.services_list { d.push(("service_change".into(), "New services".into())); }
+    if a.network_devices != b.network_devices { d.push(("new_device".into(), "New device on network".into())); }
     d
 }
+
 fn download_phishing_list() {
     let path = std::path::PathBuf::from(DATA_DIR).join("phishing_hosts.txt");
     if !path.exists() {
         std::thread::spawn(|| {
             let _ = Command::new("powershell").args(["-NoProfile","-Command","Invoke-WebRequest -Uri 'https://someonewhocares.org/hosts/zero/hosts' -OutFile 'C:\\ProgramData\\Trust Sentinel\\phishing_hosts.txt' -ErrorAction SilentlyContinue"]).output();
         });
+    }
+}
+
+fn watchdog_heartbeat(events: &Arc<Mutex<Vec<String>>>) {
+    let heartbeat_file = std::path::PathBuf::from(DATA_DIR).join("heartbeat.txt");
+    loop {
+        std::thread::sleep(Duration::from_secs(10));
+        let _ = fs::write(&heartbeat_file, Utc::now().to_rfc3339());
+    }
+}
+
+fn persist_event(seed: &[u8], event_type: &str, details: &str, severity: &str) {
+    let key = get_encryption_key(seed);
+    let event = format!("{{\"t\":\"{}\",\"e\":\"{}\",\"d\":\"{}\",\"s\":\"{}\"}}", Utc::now().to_rfc3339(), event_type, details, severity);
+    let enc = encrypt_data(event.as_bytes(), &key);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&enc);
+    let lp = std::path::PathBuf::from(DATA_DIR).join("events.log");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(lp) {
+        let _ = writeln!(f, "{}", b64);
     }
 }
 
@@ -314,18 +414,6 @@ fn encrypt_data(plaintext: &[u8], key: &[u8]) -> Vec<u8> {
     result
 }
 
-fn decrypt_data(ciphertext: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
-    if ciphertext.len() < 12 { return None; }
-    let (nonce_bytes, encrypted) = ciphertext.split_at(12);
-    let unbound = UnboundKey::new(&AES_256_GCM, key).ok()?;
-    let key = LessSafeKey::new(unbound);
-    let nonce = Nonce::assume_unique_for_key(nonce_bytes.try_into().ok()?);
-    let mut data = encrypted.to_vec();
-    key.open_in_place(nonce, Aad::empty(), &mut data).ok()?;
-    Some(data)
-}
-
 fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     use sha2::Digest;
     let machine_id = std::env::var("COMPUTERNAME").unwrap_or_default();
@@ -334,12 +422,5 @@ fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     hasher.update(machine_id.as_bytes());
     hasher.finalize().to_vec()
 }
-
-
-
-
-
-
-
 
 
