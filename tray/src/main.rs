@@ -33,7 +33,7 @@ fn make_icon(r: u8, g: u8, b: u8) -> tray_icon::Icon {
 
 fn main() {
     println!("Starting Trust Sentinel tray...");
-    let client = Client::new();
+    let client = Client::builder().timeout(Duration::from_secs(5)).build().unwrap();
     let icon_green = make_icon(0, 255, 0);
     let icon_yellow = make_icon(255, 255, 0);
     let icon_red = make_icon(255, 0, 0);

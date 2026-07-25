@@ -53,6 +53,12 @@ fn main() {
     let _ = fs::create_dir_all(DATA_DIR);
     backup_hosts();
     let seed = random_seed();
+    let cached_state = Arc::new(Mutex::new(collect_state()));
+    let cs_bg = cached_state.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(10));
+        if let Ok(mut c) = cs_bg.lock() { *c = collect_state(); }
+    });
     // Lock seed in memory
     let locked_seed = seed.clone();
     std::thread::spawn(move || {
@@ -422,5 +428,7 @@ fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     hasher.update(machine_id.as_bytes());
     hasher.finalize().to_vec()
 }
+
+
 
 
