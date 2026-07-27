@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::TcpListener; use std::os::windows::io::AsRawHandle;
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -87,6 +87,13 @@ fn main() {
                 let n = s.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]);
                 if req.contains("POST") && !req.contains(&format!("token={}", token_str(&s1))) { let _ = s.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n"); continue; }
+
+                if req.contains("GET /token") {
+                    let st = DaemonStatus { trust_state: "ok".into(), token: token_str(&s1), last_check: "".into(), latest_events: vec![] };
+                    let json = serde_json::to_string(&st).unwrap();
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", json.len(), json).as_bytes());
+                    continue;
+                }
 
                 if req.contains("GET /dashboard") {
                     let html = include_str!("web/settings.html");
@@ -259,7 +266,7 @@ fn auto_repair(known_startup: &Arc<Mutex<HashSet<String>>>) -> Vec<String> {
     for entry in &current_startup {
         if !trusted.contains(entry) && entry != "None" {
             if Command::new("powershell").args(["-NoProfile","-Command",&format!("Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{}' -ErrorAction SilentlyContinue", entry)]).output().map(|o| o.status.success()).unwrap_or(false) {
-                fixed.push(format!("auto_repair: Removed startup: {}", entry));
+                fixed.push(format!("auto_repair: Quarantined startup: {}", entry));
             }
         }
     }
@@ -298,7 +305,7 @@ fn get_wifi() -> String { if let Ok(o) = Command::new("powershell").args(["-NoPr
 fn detect_port_scan() -> String { let mut ip_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new(); if let Ok(o) = Command::new("netstat").args(["-ano","-p","TCP"]).output() { for l in String::from_utf8_lossy(&o.stdout).lines().skip(4) { let parts: Vec<&str> = l.split_whitespace().collect(); if parts.len() >= 3 && parts[3] == "ESTABLISHED" { if let Some(ip) = parts[2].rsplitn(2, ':').nth(1) { if !ip.starts_with("127.") && !ip.starts_with("192.168.") && !ip.starts_with("10.") && !ip.starts_with("23.") && !ip.starts_with("172.16.") { *ip_counts.entry(ip.to_string()).or_insert(0) += 1; } } } } } for (ip, count) in &ip_counts { if *count > SCAN_THRESHOLD { return ip.clone(); } } String::new() }
 fn check_phishing() -> String { let hosts_path = std::path::PathBuf::from(DATA_DIR).join("phishing_hosts.txt"); let blocklist = PHISHING_BLOCKLIST.get_or_init(|| { let mut set = HashSet::new(); if let Ok(c) = fs::read_to_string(&hosts_path) { for l in c.lines() { let l = l.trim(); if l.starts_with("0.0.0.0") || l.starts_with("127.0.0.1") { if let Some(d) = l.split_whitespace().nth(1) { set.insert(d.to_lowercase()); } } } } set }); if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-DnsClientCache | Select-Object -ExpandProperty Entry | Where-Object { $_ -match '^[a-zA-Z]' }"]).output() { for e in String::from_utf8_lossy(&o.stdout).lines() { let e = e.trim().to_lowercase(); if !e.is_empty() && blocklist.contains(&e) { return e; } } } String::new() }
 fn check_ransomware() -> bool { let canary_dir = std::path::PathBuf::from(DATA_DIR).join("canary"); let _ = fs::create_dir_all(&canary_dir); let canary_files = ["test.docx", "test.pdf", "test.jpg", "test.txt", "test.xlsx"]; let mut modified = 0; for fname in &canary_files { let p = canary_dir.join(fname); if !p.exists() { let _ = fs::write(&p, b"TRUST SENTINEL CANARY"); } if let Ok(meta) = fs::metadata(&p) { if let Ok(mt) = meta.modified() { if let Ok(d) = SystemTime::now().duration_since(mt) { if d.as_secs() < 30 { modified += 1; } } } } } modified >= 2 }
-fn check_usb() -> String { if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'OK' -and $_.FriendlyName -match 'storage|flash|drive'} | Select-Object -ExpandProperty FriendlyName"]).output() { let s = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !s.is_empty() { return s; } } String::new() }
+fn check_usb() -> String { if let Ok(o) = Command::new("powershell").args(["-NoProfile","-Command","Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'OK' -and $_.FriendlyName -match 'storage|flash|drive|mass'} | Select-Object -ExpandProperty FriendlyName"]).output() { let s = String::from_utf8_lossy(&o.stdout).trim().to_string(); if !s.is_empty() { return s; } } String::new() }
 
 fn get_scheduled_tasks() -> Vec<String> {
     let mut t = Vec::new();
@@ -428,6 +435,11 @@ fn get_encryption_key(seed: &[u8]) -> Vec<u8> {
     hasher.update(machine_id.as_bytes());
     hasher.finalize().to_vec()
 }
+
+
+
+
+
 
 
 
