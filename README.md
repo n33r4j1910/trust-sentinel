@@ -4,7 +4,7 @@
 
 > **Your device's silent guardian. No cloud. No nonsense.**
 
-Trust Sentinel is a lightweight Windows guardian (smoke detector). Just download, double-click and always protected. It auto-detects DNS hijacking, ARP spoofing, rogue WiFi, phishing domains, Ransomware canary early, and USB threats then repairs them automatically. Sets stealth mode on public networks. Updates itself weekly. Zero cloud, Minimal network (phishing blocklist only), Zero telemetry and Zero AI. All run locally with < ~30MB RAM & 1% CPU usage and everything stays on your PC. Free. Open source.
+Trust Sentinel is a lightweight Windows guardian (smoke detector). Just download, double-click and always protected. It auto-detects DNS hijacking, ARP spoofing, rogue WiFi, phishing domains, ransomware canary alerts, and USB threats — then repairs them automatically. Sets stealth mode on public networks. Phishing blocklist updates weekly. Zero cloud, minimal network (blocklist only), zero telemetry, zero AI. All run locally with <30MB RAM & <1% CPU. Everything stays on your PC. Free. Open source.
 
 ---
 
@@ -16,7 +16,7 @@ Think of it as a **smoke alarm for your computer**.
 
 - ✅ Always running
 - ✅ Silent until something is wrong
-- ✅ Detects security changes instantly
+- ✅ Detects 12 threat types instantly
 - ✅ Automatically repairs common threats
 - ✅ Completely offline
 - ✅ Tested: 64/69 VirusTotal clean, 0/100 CAPE sandbox score
@@ -43,9 +43,12 @@ But who watches for things like:
 - Active port scanning?
 - ARP spoofing?
 - Rogue Wi-Fi hotspots?
-- Ransomware canary early warning encryption?
+- Ransomware canary alerts?
 - Firewall being disabled?
 - Phishing domains already cached on your PC?
+- Root CA certificates being installed?
+- Scheduled tasks being added?
+- Proxy settings being changed?
 
 **Trust Sentinel does.**
 
@@ -68,6 +71,12 @@ Monitored items include:
 - Windows Firewall
 - ARP table
 - Connected Wi-Fi SSID
+- Scheduled Tasks
+- Proxy settings
+- Root CA certificates
+- Windows Defender status
+- Running services
+- Network devices
 
 Every few minutes, the baseline is verified.
 
@@ -81,12 +90,16 @@ Trust Sentinel detects active attacks including:
 
 - 🔍 Port scans → auto-blocks attacker IP
 - 🌐 ARP spoofing (MITM) → flushes ARP cache
-- 📶 Rogue / Wi-Fi network change detection → auto-enables stealth
-- 🎣 Phishing domains (80,000+ blacklist) → clears DNS cache
-- 🔐 Ransomware canary early warning → disables network
+- 📶 Wi-Fi network change → auto-enables stealth
+- 🎣 Phishing domains (80,000+ blocklist) → clears DNS cache
+- 🔐 Ransomware canary alert → disables network
 - 💾 USB storage insertion → auto-ejects device
 - 🔑 Unknown startup entries → auto-removes
 - 🔌 New listening ports → auto-blocks
+- 📋 Rogue root CA → alerts on HTTPS interception
+- 🔒 Windows Defender disabled → alerts
+- 📅 New scheduled tasks → alerts
+- 🌐 Proxy settings changed → alerts
 
 ---
 
@@ -105,7 +118,7 @@ When possible, Trust Sentinel repairs security issues automatically.
 | Unknown startup | Remove from registry/startup |
 | New listening port | Block via Firewall |
 | USB storage inserted | Auto-eject device |
-| Ransomware canary early warning detected | Disable network adapter |
+| Ransomware canary alert | Disable network adapter |
 
 ---
 
@@ -143,7 +156,20 @@ Trust Sentinel always stays in your system tray.
 | 🔴 **Compromised** | Active attack or multiple issues — popup + browser opens |
 | 🟠 **Stealth** | Device hidden from network |
 
-Hover over the icon to view detected issues and recommended actions.
+Hover over the icon to view detected issues. Dashboard opens automatically on alerts.
+
+---
+
+## 🖥️ Dashboard
+
+Open `http://127.0.0.1:12789/dashboard` for one-click controls:
+
+- Reset Baseline
+- Enable/Disable Stealth
+- Set Home WiFi
+- Auto-Repair
+
+Token-based authentication on all actions.
 
 ---
 
@@ -180,7 +206,7 @@ You need all three.
 3. Run `start_silent.vbs` (silent) or `trust-sentinel-daemon.exe` (visible).
 4. Allow Administrator permissions (recommended for auto-repair).
 5. Let Trust Sentinel create your trusted baseline.
-6. Set your home WiFi: `GET http://127.0.0.1:12789 for token, then POST /home?token=<token>`
+6. Set your home WiFi: Open `http://127.0.0.1:12789/dashboard` → click "Set Home WiFi"
 7. Continue using your PC normally.
 
 ---
@@ -200,11 +226,11 @@ You need all three.
 
 | Category | Features |
 |----------|----------|
-| **Integrity Monitoring** | DNS, Hosts file, Startup Programs, Listening Ports, Firewall, ARP Table, Wi-Fi SSID |
-| **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware canary early warning, USB Storage, Wi-Fi network change detection |
+| **Integrity Monitoring** | DNS, Hosts file, Startup Programs, Listening Ports, Firewall, ARP Table, Wi-Fi SSID, Scheduled Tasks, Proxy, Root CAs, Defender, Services, Network Devices |
+| **Intrusion Detection** | Port Scanning, ARP Spoofing, Phishing Domains (80K+), Ransomware Canary, USB Storage, Wi-Fi Change, Root CA, Defender Disabled, Proxy Change |
 | **Automatic Repair** | Hosts Restore, DNS Reset, Firewall Recovery, ARP Flush, DNS Cache Clear, Port Blocking, Startup Removal, USB Eject, Network Kill |
-| **Stealth Mode** | Block Incoming Connections, Disable Discovery, Stop File Sharing, Auto-Stealth on New WiFi |
-| **User Experience** | System Tray (Green/Yellow/Red/Orange), Rich Tooltips, Popup Alerts, Baseline Reset, One-Click Repair |
+| **Stealth Mode** | Block Incoming, Disable Discovery, Stop File Sharing, Auto-Stealth on New WiFi |
+| **User Experience** | System Tray (Green/Yellow/Red/Orange), Tooltips, Popup Alerts, Dashboard, One-Click Repair |
 | **Privacy** | Fully Offline, No Accounts, No Telemetry, Localhost Only |
 
 ---
@@ -218,7 +244,7 @@ Designed to stay invisible.
 | CPU (Idle) | **<0.1%** |
 | RAM | **~30 MB** |
 | Disk Space | **<10 MB** |
-| Network Usage | **None** |
+| Network Usage | **Minimal (blocklist only)** |
 
 Runs comfortably on older laptops without affecting performance.
 
@@ -234,13 +260,15 @@ Runs comfortably on older laptops without affecting performance.
 | ARP Spoofing | ❌ | ❌ | ✅ Auto Repair |
 | Firewall Disabled | ❌ | ❌ | ✅ Auto Repair |
 | Port Scan Detection | ❌ | ❌ | ✅ Auto Block |
-| Ransomware canary early warning Behaviour | ⚠️ Partial | ❌ | ✅ Early Detection + Network Kill |
-| Phishing Domains | ❌ | ❌ | ✅ 80K+ Database + DNS Clear |
+| Ransomware Canary | ⚠️ Partial | ❌ | ✅ Early Detection |
+| Phishing Domains | ❌ | ❌ | ✅ 80K+ Database |
 | USB Storage Detection | ❌ | ❌ | ✅ Auto Eject |
 | Startup Persistence | ⚠️ Partial | ❌ | ✅ Auto Remove |
-| Wi-Fi network change detection | ❌ | ❌ | ✅ Auto Stealth |
+| Wi-Fi Change Detection | ❌ | ❌ | ✅ Auto Stealth |
 | Stealth Mode | ❌ | ❌ | ✅ |
-| New Listening Ports | ❌ | ❌ | ✅ Auto Block |
+| Root CA Detection | ❌ | ❌ | ✅ |
+| Defender Monitoring | ❌ | ❌ | ✅ |
+| Proxy Detection | ❌ | ❌ | ✅ |
 
 ---
 
@@ -273,58 +301,32 @@ Trust Sentinel has been tested through multiple sandbox environments:
 | VirusTotal (69 engines) | **64/69 Clean (93%)** — 5 false positives from unsigned binary |
 | CAPE Sandbox | **0/100 Malicious Score** — All behaviors by design |
 | Sigma Rules | **6 matches** — All from expected PowerShell monitoring |
-
-[View full results](https://github.com/n33r4j1910/trust-sentinel)
+| Live Testing | **10/12 tests passed** — API, auth, dashboard, detection verified |
 
 ---
 
 # ⚠️ Current Limitations
 
 - Hosts file repair requires Administrator privileges.
-- Some system checks currently rely on PowerShell (native Windows API migration is underway).
-- Credential Guard currently detects file **writes**, not **reads**.
-- Auto-repair pauses during Stealth Mode to prevent firewall conflicts.
-- User-context features (USB monitoring and credential monitoring) work best when running under the logged-in user account.
+- Some system checks rely on PowerShell (native API migration underway).
+- Ransomware detection threshold set to 5 files to avoid false positives.
+- CORS restricted to localhost for security.
 
 ---
 
 # 🛣️ Roadmap
 
-Future improvements include:
-
 - Native Windows API implementation
 - TPM-backed hardware trust verification
-- Secure Boot verification
-- BitLocker health monitoring
 - VPN drop detection
 - Linux support
 - macOS support
-- Code signing via SignPath.io
+- Code signing via SignPath.io (in progress)
 
 ---
 
 # 🏷️ Keywords
-endpoint-security
-trust-agent
-device-integrity
-zero-trust
-offline
-privacy-first
-windows-security
-intrusion-detection
-self-healing
-auto-repair
-Ransomware canary early warning
-phishing
-port-scan
-arp-spoofing
-stealth-mode
-tpm-2.0
-rust
-lightweight
-no-cloud
-open-source
-
+endpoint-security trust-agent device-integrity zero-trust offline privacy-first windows-security intrusion-detection self-healing auto-repair ransomware phishing port-scan arp-spoofing stealth-mode root-ca-detection proxy-detection defender-monitoring rust lightweight no-cloud open-source
 
 ---
 
@@ -333,4 +335,3 @@ open-source
 Licensed under the **MIT License**.
 
 © 2026 Trust Sentinel
-
